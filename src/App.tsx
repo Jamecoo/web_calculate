@@ -1,15 +1,13 @@
-import { Box } from '@mui/material'
-import './App.css'
+import "./App.css";
+import AppDrawer from "./components/drawer";
+import AppRouter from "./router";
 
 function App() {
-
   return (
-    <>
-      <Box>
-        Calculate Web
-      </Box>
-    </>
-  )
+    <AppDrawer>
+      <AppRouter />
+    </AppDrawer>
+  );
 }
 
-export default App
+export default App;
