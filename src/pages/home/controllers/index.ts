@@ -4,6 +4,13 @@ import type { CalculationResult, CalculationType, Purchase, UserShare } from '..
 import { db } from '../../../firebase'
 import Swal from 'sweetalert2'
 
+// Settlement type to show who owes whom
+export interface Settlement {
+  from: string // User who needs to pay
+  to: string   // User who should receive
+  amount: number
+}
+
 const useMainController = () => {
   const [totalAmount, setTotalAmount] = useState<string>('')
   const [userAmount, setUserAmount] = useState<string>('')
@@ -112,6 +119,49 @@ const useMainController = () => {
     setUsers([])
   }
 
+  // Calculate settlements - who owes whom
+  const calculateSettlements = (): Settlement[] => {
+    if (users.length === 0) return []
+
+    // Separate users into creditors (negative balance - should receive) and debtors (positive balance - should pay)
+    const creditors = users.filter(u => u.currentBalance < 0).map(u => ({
+      userName: u.userName,
+      amount: Math.abs(u.currentBalance)
+    }))
+
+    const debtors = users.filter(u => u.currentBalance > 0).map(u => ({
+      userName: u.userName,
+      amount: u.currentBalance
+    }))
+
+    const settlements: Settlement[] = []
+    let i = 0, j = 0
+
+    // Match creditors with debtors
+    while (i < creditors.length && j < debtors.length) {
+      const creditor = creditors[i]
+      const debtor = debtors[j]
+      
+      const settleAmount = Math.min(creditor.amount, debtor.amount)
+      
+      if (settleAmount > 0.01) { // Ignore very small amounts
+        settlements.push({
+          from: debtor.userName,
+          to: creditor.userName,
+          amount: settleAmount
+        })
+      }
+
+      creditor.amount -= settleAmount
+      debtor.amount -= settleAmount
+
+      if (creditor.amount < 0.01) i++
+      if (debtor.amount < 0.01) j++
+    }
+
+    return settlements
+  }
+
   const addPurchase = async (userIndex: number, itemName: string, amount: number) => {
     if (amount <= 0) {
       Swal.fire({
@@ -124,15 +174,6 @@ const useMainController = () => {
     }
 
     const user = users[userIndex]
-    if (amount > user.currentBalance) {
-      Swal.fire({
-        icon: 'error',
-        title: 'ຂໍ້ຜິດພາດ',
-        text: `${user.userName} ມີເງິນບໍ່ພໍ`,
-        confirmButtonText: 'ຕົກລົງ'
-      })
-      return
-    }
 
     const newPurchase: Purchase = {
       id: `purchase_${Date.now()}`,
@@ -141,23 +182,31 @@ const useMainController = () => {
       timestamp: new Date() as any
     }
 
+    const newBalance = user.currentBalance - amount
     const updatedUsers = [...users]
     updatedUsers[userIndex] = {
       ...user,
-      currentBalance: user.currentBalance - amount,
+      currentBalance: newBalance,
       purchases: [...user.purchases, newPurchase]
     }
 
     setUsers(updatedUsers)
     setError('')
 
-    // Show success message
+    // Show success message with appropriate info
+    let message = 'ເພີ່ມລາຍການຊື້ສຳເລັດແລ້ວ'
+    
+    // If balance is negative, user should receive money back
+    if (newBalance < 0) {
+      const amountToReceive = Math.abs(newBalance)
+      message = `${user.userName} ຊື້ເກີນສ່ວນແບ່ງ, ຄວນໄດ້ຮັບເງິນຄືນ ${amountToReceive.toLocaleString()} ກີບ`
+    }
+
     await Swal.fire({
       icon: 'success',
       title: 'ສຳເລັດ',
-      text: 'ເພີ່ມລາຍການຊື້ສຳເລັດແລ້ວ',
-      timer: 1500,
-      showConfirmButton: false
+      text: message,
+      confirmButtonText: 'ຕົກລົງ'
     })
 
     if (currentSplitId) {
@@ -184,11 +233,14 @@ const useMainController = () => {
 
     setLoading(true)
     try {
+      const settlements = calculateSettlements()
+      
       const docRef = await addDoc(collection(db, 'user_splits'), {
         totalAmount: parseFloat(totalAmount),
         totalUsers: users.length,
         perUserAmount: users[0].initialShare,
         users: users,
+        settlements: settlements,
         timestamp: serverTimestamp(),
         calculationType: 'split_users'
       })
@@ -364,7 +416,8 @@ const useMainController = () => {
     saveSplitToFirebase,
     saveToHistory,
     clearCalculation,
-    getFormulaDescription
+    getFormulaDescription,
+    calculateSettlements // Export this function
   }
 }
 
