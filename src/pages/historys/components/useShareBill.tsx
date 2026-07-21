@@ -1,272 +1,354 @@
-import { useRef } from 'react'
-import html2canvas from 'html2canvas'
-import Swal from 'sweetalert2'
-
-interface Settlement {
-  from: string
-  to: string
-  amount: number
-}
-
-const calculateSettlements = (users: any[]): Settlement[] => {
-  if (users.length === 0) return []
-
-  const creditors = users
-    .filter((u) => u.currentBalance < 0)
-    .map((u) => ({
-      userName: u.userName,
-      amount: Math.abs(u.currentBalance),
-    }))
-
-  const debtors = users
-    .filter((u) => u.currentBalance > 0)
-    .map((u) => ({
-      userName: u.userName,
-      amount: u.currentBalance,
-    }))
-
-  const settlements: Settlement[] = []
-  let i = 0, j = 0
-
-  while (i < creditors.length && j < debtors.length) {
-    const creditor = creditors[i]
-    const debtor = debtors[j]
-    const settleAmount = Math.min(creditor.amount, debtor.amount)
-
-    if (settleAmount > 0.01) {
-      settlements.push({
-        from: debtor.userName,
-        to: creditor.userName,
-        amount: settleAmount,
-      })
-    }
-
-    creditor.amount -= settleAmount
-    debtor.amount -= settleAmount
-
-    if (creditor.amount < 0.01) i++
-    if (debtor.amount < 0.01) j++
-  }
-
-  return settlements
-}
+import { useRef } from "react";
+import jsPDF from "jspdf";
+import html2canvas from "html2canvas";
+import Swal from "sweetalert2";
+import {
+  computeUserTotals,
+  calculateSettlements,
+  type Settlement,
+} from "../../../utils/splitCalculations";
+import type { UserShare } from "../../../model/calculateModel";
 
 const useShareableBill = () => {
-  const billRef = useRef<HTMLDivElement>(null)
+  const billRef = useRef<HTMLDivElement>(null);
 
   const generateBillHTML = (splitData: any): string => {
-    const settlements = calculateSettlements(splitData.users)
-    const formatLaoKip = (amount: number) => amount.toLocaleString('lo-LA')
+    // Recompute from raw purchases so legacy docs (without paid/consumed) render
+    // correctly under the per-item consumption model.
+    const users: UserShare[] = computeUserTotals(splitData.users || []);
+    const settlements: Settlement[] = calculateSettlements(users);
+    const fmt = (amount: number) =>
+      (amount || 0).toLocaleString("lo-LA", { maximumFractionDigits: 0 });
+
+    const nameById: Record<string, string> = {};
+    users.forEach((u) => (nameById[u.userId] = u.userName));
+    const consumerLabel = (ids?: string[]): string => {
+      const list = ids && ids.length > 0 ? ids : users.map((u) => u.userId);
+      if (list.length === users.length) return "ທຸກຄົນ";
+      return list.map((id) => nameById[id] || "?").join(", ");
+    };
+
+    const totalAmount =
+      splitData.totalAmount ??
+      users.reduce(
+        (s, u) => s + u.purchases.reduce((a, p) => a + p.amount, 0),
+        0
+      );
+    const perUserAmount =
+      splitData.perUserAmount ?? (users.length ? totalAmount / users.length : 0);
+
+    const date = new Date(splitData.timestamp?.seconds * 1000 || Date.now());
+    const day = String(date.getDate()).padStart(2, "0");
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const year = date.getFullYear();
+    const dateStr = `${day}/${month}/${year}`;
+
+    const INDIGO = "#4f46e5";
+    const SLATE = "#1e293b";
+    const MUTED = "#64748b";
+    const LINE = "#e2e8f0";
+
+    const settlementsHTML =
+      settlements.length > 0
+        ? settlements
+            .map(
+              (s) => `
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border:1px solid ${LINE};border-radius:12px;margin-bottom:10px;">
+          <div style="display:flex;align-items:center;gap:10px;min-width:0;">
+            <span style="font-weight:700;color:${SLATE};">${s.from}</span>
+            <span style="color:${INDIGO};font-size:18px;">→</span>
+            <span style="font-weight:700;color:${SLATE};">${s.to}</span>
+          </div>
+          <span style="font-weight:700;color:${INDIGO};white-space:nowrap;">${fmt(
+                s.amount
+              )} ກີບ</span>
+        </div>`
+            )
+            .join("")
+        : `<div style="padding:14px 16px;border:1px solid ${LINE};border-radius:12px;color:#16a34a;font-weight:600;">✅ ທຸກຄົນເສຍສົມດູນແລ້ວ ບໍ່ຈຳເປັນຕ້ອງໂອນເງິນ</div>`;
+
+    const usersHTML = users
+      .map((user) => {
+        const paid = user.paid ?? 0;
+        const consumed = user.consumed ?? 0;
+        const shouldReceive = user.currentBalance < 0;
+        const shouldPay = user.currentBalance > 0;
+        const statusColor = shouldReceive
+          ? "#16a34a"
+          : shouldPay
+          ? "#f59e0b"
+          : MUTED;
+        const statusLabel = shouldReceive
+          ? "ຄວນໄດ້ຮັບຄືນ"
+          : shouldPay
+          ? "ຍັງຕ້ອງຈ່າຍ"
+          : "ເສຍສົມດູນ";
+
+        const itemsHTML =
+          user.purchases.length > 0
+            ? `<div style="margin-top:12px;">
+                ${user.purchases
+                  .map(
+                    (p) => `
+                  <div style="display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-top:1px dashed ${LINE};">
+                    <div style="min-width:0;">
+                      <div style="color:${SLATE};font-size:14px;">${p.itemName}</div>
+                      <div style="color:${MUTED};font-size:12px;">ຮ່ວມ: ${consumerLabel(
+                      p.consumers
+                    )}</div>
+                    </div>
+                    <span style="color:${SLATE};font-size:14px;white-space:nowrap;">${fmt(
+                      p.amount
+                    )} ກີບ</span>
+                  </div>`
+                  )
+                  .join("")}
+              </div>`
+            : "";
+
+        return `
+        <div class="user-card" style="border:1px solid ${LINE};border-radius:14px;padding:18px;margin-bottom:14px;background:#fff;">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:10px;">
+            <span style="font-weight:700;font-size:17px;color:${SLATE};">${
+          user.userName
+        }</span>
+            <span style="font-size:12px;font-weight:700;color:${statusColor};border:1px solid ${statusColor};padding:3px 10px;border-radius:999px;white-space:nowrap;">${statusLabel}</span>
+          </div>
+          <div style="display:flex;gap:24px;flex-wrap:wrap;">
+            <div><div style="color:${MUTED};font-size:12px;">ຈ່າຍໄປ</div><div style="color:${SLATE};font-weight:600;">${fmt(
+          paid
+        )} ກີບ</div></div>
+            <div><div style="color:${MUTED};font-size:12px;">ຮັບຜິດຊອບ</div><div style="color:${SLATE};font-weight:600;">${fmt(
+          consumed
+        )} ກີບ</div></div>
+            <div style="margin-left:auto;text-align:right;"><div style="color:${MUTED};font-size:12px;">${statusLabel}</div><div style="color:${statusColor};font-weight:700;font-size:18px;">${fmt(
+          Math.abs(user.currentBalance)
+        )} ກີບ</div></div>
+          </div>
+          ${itemsHTML}
+        </div>`;
+      })
+      .join("");
 
     return `
-      <div style="font-family: 'Noto Sans Lao', sans-serif; background: white; padding: 32px; max-width: 600px; margin: 0 auto;">
-        <!-- Header -->
-        <div style="text-align: center; margin-bottom: 24px;">
-          <div style="font-size: 48px; margin-bottom: 8px;">🧾</div>
-          <h1 style="font-size: 32px; font-weight: bold; margin: 8px 0;">ໃບບິນແບ່ງເງິນ</h1>
-          <p style="color: #666; font-size: 14px;">ວັນທີ່: ${new Date(splitData.timestamp?.seconds * 1000 || Date.now()).toLocaleDateString('lo-LA')}</p>
-        </div>
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <style>
+          @page { size: A4; margin: 0; }
+          * { box-sizing: border-box; }
+          body { margin:0; padding:0; font-family:'Noto Sans Lao','Phetsarath OT',system-ui,sans-serif; color:${SLATE}; }
+          .user-card { page-break-inside: avoid; }
+          .section { page-break-inside: avoid; }
+        </style>
+      </head>
+      <body>
+        <div style="background:#f7f8fb;padding:28px;">
+          <div style="max-width:760px;margin:0 auto;background:#fff;border:1px solid ${LINE};border-radius:20px;overflow:hidden;">
 
-        <hr style="border: none; border-top: 2px solid #ddd; margin: 24px 0;">
-
-        <!-- Summary -->
-        <div style="background: #e3f2fd; padding: 16px; border-radius: 8px; margin-bottom: 24px;">
-          <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
-            <span style="font-weight: bold;">ຈຳນວນເງິນທັງໝົດ:</span>
-            <span style="font-size: 20px; font-weight: bold;">${formatLaoKip(splitData.totalAmount)} ກີບ</span>
-          </div>
-          <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
-            <span style="font-size: 14px;">ຈຳນວນຄົນ:</span>
-            <span style="font-size: 14px;">${splitData.totalUsers} ຄົນ</span>
-          </div>
-          <div style="display: flex; justify-content: space-between;">
-            <span style="font-size: 14px;">ຕໍ່ຄົນ:</span>
-            <span style="font-size: 14px; font-weight: 500;">${formatLaoKip(splitData.perUserAmount)} ກີບ</span>
-          </div>
-        </div>
-
-        <!-- Users -->
-        <h2 style="font-size: 18px; font-weight: bold; margin-bottom: 16px;">ລາຍລະອຽດການໃຊ້ຈ່າຍ</h2>
-        
-        ${splitData.users.map((user: any, index: number) => {
-          const totalSpent = user.initialShare - user.currentBalance
-          const shouldReceive = user.currentBalance < 0
-          const shouldPay = user.currentBalance > 0
-
-          return `
-            <div style="border: ${shouldReceive ? '2px solid #4caf50' : '1px solid #ddd'}; padding: 16px; border-radius: 8px; margin-bottom: 16px; background: ${shouldReceive ? '#f1f8f4' : 'white'};">
-              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                <span style="font-weight: bold; font-size: 16px;">${index + 1}. ${user.userName}</span>
-                ${shouldReceive ? '<span style="background: #4caf50; color: white; padding: 4px 8px; border-radius: 4px; font-size: 12px;">ຄວນໄດ້ຮັບເງິນຄືນ</span>' : ''}
-                ${shouldPay ? '<span style="background: #ff9800; color: white; padding: 4px 8px; border-radius: 4px; font-size: 12px;">ຕ້ອງຈ່າຍ</span>' : ''}
-              </div>
-
-              ${user.purchases.length > 0 ? `
-                <div style="margin: 8px 0 8px 16px;">
-                  ${user.purchases.map((p: any) => `
-                    <div style="display: flex; justify-content: space-between; padding: 4px 0;">
-                      <span style="font-size: 14px;">• ${p.itemName}</span>
-                      <span style="font-size: 14px; color: #d32f2f;">${formatLaoKip(p.amount)} ກີບ</span>
-                    </div>
-                  `).join('')}
+            <!-- Header -->
+            <div style="padding:28px 28px 22px;border-bottom:1px solid ${LINE};">
+              <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;">
+                <div style="min-width:0;">
+                  <div style="font-size:12px;letter-spacing:1px;text-transform:uppercase;color:${INDIGO};font-weight:700;margin-bottom:4px;">🧾 ໃບບິນແບ່ງເງິນ</div>
+                  <div style="font-size:26px;font-weight:800;color:${SLATE};word-break:break-word;">${
+      splitData.tripName?.trim() || "ການແບ່ງເງິນ"
+    }</div>
+                  <div style="font-size:13px;color:${MUTED};margin-top:4px;">ວັນທີ່ ${dateStr}${
+      splitData.userEmail ? ` · ${splitData.userEmail}` : ""
+    }</div>
                 </div>
-              ` : ''}
-
-              <hr style="border: none; border-top: 1px solid #ddd; margin: 8px 0;">
-
-              <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
-                <span style="font-size: 14px;">ຊື້ທັງໝົດ:</span>
-                <span style="font-size: 14px; font-weight: 500;">${formatLaoKip(totalSpent)} ກີບ</span>
+                <div style="text-align:right;">
+                  <div style="font-size:12px;color:${MUTED};">ຍອດລວມ</div>
+                  <div style="font-size:24px;font-weight:800;color:${INDIGO};white-space:nowrap;">${fmt(
+                    totalAmount
+                  )} ກີບ</div>
+                </div>
               </div>
-              <div style="display: flex; justify-content: space-between;">
-                <span style="font-size: 14px; font-weight: bold;">${shouldReceive ? 'ຄວນໄດ້ຮັບຄືນ:' : shouldPay ? 'ຍັງຕ້ອງຈ່າຍ:' : 'ສະຖານະ:'}</span>
-                <span style="font-size: 14px; font-weight: bold; color: ${shouldReceive ? '#4caf50' : shouldPay ? '#ff9800' : '#000'};">
-                  ${formatLaoKip(Math.abs(user.currentBalance))} ກີບ
-                </span>
+
+              <div style="display:flex;gap:12px;margin-top:18px;flex-wrap:wrap;">
+                <div style="flex:1;min-width:120px;border:1px solid ${LINE};border-radius:12px;padding:12px;">
+                  <div style="font-size:12px;color:${MUTED};">👥 ຈຳນວນຄົນ</div>
+                  <div style="font-size:18px;font-weight:700;">${
+                    users.length
+                  } ຄົນ</div>
+                </div>
+                <div style="flex:1;min-width:120px;border:1px solid ${LINE};border-radius:12px;padding:12px;">
+                  <div style="font-size:12px;color:${MUTED};">💵 ສະເລ່ຍ/ຄົນ</div>
+                  <div style="font-size:18px;font-weight:700;">${fmt(
+                    perUserAmount
+                  )} ກີບ</div>
+                </div>
               </div>
             </div>
-          `
-        }).join('')}
 
-        ${settlements.length > 0 ? `
-          <hr style="border: none; border-top: 2px solid #ddd; margin: 24px 0;">
-          
-          <h2 style="font-size: 18px; font-weight: bold; margin-bottom: 16px;">ການໂອນເງິນທີ່ຕ້ອງເຮັດ</h2>
-          
-          ${settlements.map((s: Settlement) => `
-            <div style="background: #e3f2fd; padding: 12px; border-radius: 8px; margin-bottom: 8px; border-left: 4px solid #2196f3;">
-              <span style="font-size: 14px;">
-                <strong>${s.from}</strong> ຕ້ອງຈ່າຍໃຫ້ <strong>${s.to}</strong>: 
-                <strong style="color: #1976d2;">${formatLaoKip(s.amount)} ກີບ</strong>
-              </span>
+            <div style="padding:24px 28px;">
+              <!-- Settlements first: who pays whom -->
+              <div class="section" style="margin-bottom:28px;">
+                <div style="font-size:16px;font-weight:700;margin-bottom:12px;color:${SLATE};">💸 ໃຜຕ້ອງຈ່າຍໃຫ້ໃຜ</div>
+                ${settlementsHTML}
+              </div>
+
+              <!-- Per-person breakdown -->
+              <div class="section">
+                <div style="font-size:16px;font-weight:700;margin-bottom:12px;color:${SLATE};">ລາຍລະອຽດແຕ່ລະຄົນ</div>
+                ${usersHTML}
+              </div>
             </div>
-          `).join('')}
-        ` : ''}
 
-        <!-- Footer -->
-        <div style="margin-top: 32px; padding-top: 16px; border-top: 2px dashed #ddd; text-align: center;">
-          <p style="font-size: 12px; color: #999;">ສ້າງໂດຍ Smart Calculator • ${new Date().toLocaleDateString('lo-LA')}</p>
+            <div style="padding:18px 28px;border-top:1px solid ${LINE};text-align:center;color:${MUTED};font-size:12px;">
+              ສ້າງໂດຍ <strong style="color:${INDIGO};">SPLITZY</strong> · ${new Date().toLocaleDateString(
+      "lo-LA"
+    )}
+            </div>
+          </div>
         </div>
-      </div>
-    `
-  }
+      </body>
+      </html>
+    `;
+  };
+
+  // Render the bill HTML to a canvas once; PDF and JPEG both reuse it.
+  const renderCanvas = async (splitData: any): Promise<HTMLCanvasElement> => {
+    const container = document.createElement("div");
+    container.innerHTML = generateBillHTML(splitData);
+    container.style.position = "absolute";
+    container.style.left = "-9999px";
+    container.style.top = "0";
+    container.style.width = "816px";
+    document.body.appendChild(container);
+
+    try {
+      const canvas = await html2canvas(container, {
+        backgroundColor: "#ffffff",
+        scale: 2,
+        useCORS: true,
+        logging: false,
+        windowHeight: container.scrollHeight,
+      });
+      return canvas;
+    } finally {
+      document.body.removeChild(container);
+    }
+  };
+
+  const canvasToPdfBlob = (canvas: HTMLCanvasElement): Blob => {
+    const imgData = canvas.toDataURL("image/jpeg", 0.95);
+    const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+    const pdfWidth = pdf.internal.pageSize.getWidth();
+    const pdfHeight = pdf.internal.pageSize.getHeight();
+    const imgWidth = pdfWidth;
+    const imgHeight = (canvas.height * pdfWidth) / canvas.width;
+
+    let heightLeft = imgHeight;
+    let position = 0;
+
+    pdf.addImage(imgData, "JPEG", 0, position, imgWidth, imgHeight);
+    heightLeft -= pdfHeight;
+
+    while (heightLeft > 0) {
+      position -= pdfHeight;
+      pdf.addPage();
+      pdf.addImage(imgData, "JPEG", 0, position, imgWidth, imgHeight);
+      heightLeft -= pdfHeight;
+    }
+
+    return pdf.output("blob");
+  };
+
+  const fileBase = (splitData: any): string => {
+    const name = (splitData.tripName || "bill")
+      .toString()
+      .trim()
+      .replace(/\s+/g, "-");
+    return `${name || "bill"}-${Date.now()}`;
+  };
+
+  const triggerDownload = (blobUrl: string, filename: string) => {
+    const a = document.createElement("a");
+    a.href = blobUrl;
+    a.download = filename;
+    a.click();
+  };
+
+  const ok = (text: string) =>
+    Swal.fire({
+      icon: "success",
+      title: "ສຳເລັດ",
+      text,
+      timer: 1500,
+      showConfirmButton: false,
+    });
+
+  const fail = (text: string) =>
+    Swal.fire({
+      icon: "error",
+      title: "ຂໍ້ຜິດພາດ",
+      text,
+      confirmButtonText: "ຕົກລົງ",
+    });
+
+  const downloadBillPdf = async (splitData: any) => {
+    try {
+      const canvas = await renderCanvas(splitData);
+      const blob = canvasToPdfBlob(canvas);
+      const url = URL.createObjectURL(blob);
+      triggerDownload(url, `${fileBase(splitData)}.pdf`);
+      URL.revokeObjectURL(url);
+      await ok("ດາວໂຫຼດ PDF ສຳເລັດແລ້ວ");
+    } catch (error) {
+      console.error("Error exporting PDF:", error);
+      await fail("ບໍ່ສາມາດດາວໂຫຼດ PDF ໄດ້");
+    }
+  };
+
+  const downloadBillJpeg = async (splitData: any) => {
+    try {
+      const canvas = await renderCanvas(splitData);
+      const dataUrl = canvas.toDataURL("image/jpeg", 0.95);
+      triggerDownload(dataUrl, `${fileBase(splitData)}.jpg`);
+      await ok("ດາວໂຫຼດ JPEG ສຳເລັດແລ້ວ");
+    } catch (error) {
+      console.error("Error exporting JPEG:", error);
+      await fail("ບໍ່ສາມາດດາວໂຫຼດ JPEG ໄດ້");
+    }
+  };
 
   const shareBill = async (splitData: any) => {
     try {
-      // Create temporary container
-      const container = document.createElement('div')
-      container.innerHTML = generateBillHTML(splitData)
-      container.style.position = 'absolute'
-      container.style.left = '-9999px'
-      document.body.appendChild(container)
+      const canvas = await renderCanvas(splitData);
+      const blob = canvasToPdfBlob(canvas);
+      const file = new File([blob], `${fileBase(splitData)}.pdf`, {
+        type: "application/pdf",
+      });
 
-      // Generate image
-      const canvas = await html2canvas(container, {
-        backgroundColor: '#ffffff',
-        scale: 2,
-      })
-
-      document.body.removeChild(container)
-
-      // Convert to blob
-      const blob = await new Promise<Blob>((resolve) => {
-        canvas.toBlob((b) => resolve(b!), 'image/png')
-      })
-
-      const file = new File([blob], `bill-${Date.now()}.png`, { type: 'image/png' })
-
-      // Try native share API
-      if (navigator.share && navigator.canShare({ files: [file] })) {
+      if (navigator.share && navigator.canShare?.({ files: [file] })) {
         await navigator.share({
-          title: 'ໃບບິນແບ່ງເງິນ',
-          text: 'ໃບບິນການແບ່ງເງິນຈາກ Smart Calculator',
+          title: "ໃບບິນແບ່ງເງິນ",
+          text: "ໃບບິນການແບ່ງເງິນຈາກ SPLITZY",
           files: [file],
-        })
-        
-        await Swal.fire({
-          icon: 'success',
-          title: 'ສຳເລັດ',
-          text: 'ແບ່ງປັນໃບບິນສຳເລັດແລ້ວ',
-          timer: 1500,
-          showConfirmButton: false,
-        })
+        });
+        await ok("ແບ່ງປັນໃບບິນສຳເລັດແລ້ວ");
       } else {
-        // Fallback: download
-        const url = URL.createObjectURL(blob)
-        const a = document.createElement('a')
-        a.href = url
-        a.download = `bill-${Date.now()}.png`
-        a.click()
-        URL.revokeObjectURL(url)
-
-        await Swal.fire({
-          icon: 'success',
-          title: 'ສຳເລັດ',
-          text: 'ດາວໂຫຼດໃບບິນສຳເລັດແລ້ວ',
-          timer: 1500,
-          showConfirmButton: false,
-        })
+        const url = URL.createObjectURL(blob);
+        triggerDownload(url, `${fileBase(splitData)}.pdf`);
+        URL.revokeObjectURL(url);
+        await ok("ດາວໂຫຼດໃບບິນສຳເລັດແລ້ວ");
       }
     } catch (error) {
-      console.error('Error sharing bill:', error)
-      await Swal.fire({
-        icon: 'error',
-        title: 'ຂໍ້ຜິດພາດ',
-        text: 'ບໍ່ສາມາດແບ່ງປັນໃບບິນໄດ້',
-        confirmButtonText: 'ຕົກລົງ',
-      })
+      console.error("Error sharing bill:", error);
+      await fail("ບໍ່ສາມາດແບ່ງປັນໃບບິນໄດ້");
     }
-  }
-
-  const downloadBill = async (splitData: any) => {
-    try {
-      const container = document.createElement('div')
-      container.innerHTML = generateBillHTML(splitData)
-      container.style.position = 'absolute'
-      container.style.left = '-9999px'
-      document.body.appendChild(container)
-
-      const canvas = await html2canvas(container, {
-        backgroundColor: '#ffffff',
-        scale: 2,
-      })
-
-      document.body.removeChild(container)
-
-      canvas.toBlob((blob) => {
-        if (!blob) return
-        const url = URL.createObjectURL(blob)
-        const a = document.createElement('a')
-        a.href = url
-        a.download = `bill-${Date.now()}.png`
-        a.click()
-        URL.revokeObjectURL(url)
-      })
-
-      await Swal.fire({
-        icon: 'success',
-        title: 'ສຳເລັດ',
-        text: 'ດາວໂຫຼດໃບບິນສຳເລັດແລ້ວ',
-        timer: 1500,
-        showConfirmButton: false,
-      })
-    } catch (error) {
-      console.error('Error downloading bill:', error)
-      await Swal.fire({
-        icon: 'error',
-        title: 'ຂໍ້ຜິດພາດ',
-        text: 'ບໍ່ສາມາດດາວໂຫຼດໃບບິນໄດ້',
-        confirmButtonText: 'ຕົກລົງ',
-      })
-    }
-  }
+  };
 
   return {
     billRef,
     shareBill,
-    downloadBill,
+    downloadBillPdf,
+    downloadBillJpeg,
     generateBillHTML,
-  }
-}
+  };
+};
 
-export default useShareableBill
+export default useShareableBill;

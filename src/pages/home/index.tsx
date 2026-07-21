@@ -28,6 +28,17 @@ import { UserSplitCalculator } from "./components/UserSplitCalculator";
 import useMainControllerContext from "./context";
 import { formatLaoKipWithCurrency } from "../../utils/formatLaoKip";
 
+// Format number with commas for display
+const formatMoneyInput = (value: string): string => {
+  const digits = value.replace(/\D/g, "");
+  return digits.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+};
+
+// Parse formatted string back to number string
+const parseMoneyInput = (value: string): string => {
+  return value.replace(/,/g, "");
+};
+
 export const Content = () => {
   const {
     totalAmount,
@@ -48,14 +59,6 @@ export const Content = () => {
 
   return (
     <Box sx={{ maxWidth: 1200, mx: "auto", py: 4 }}>
-      <Typography
-        variant="h4"
-        gutterBottom
-        sx={{ fontWeight: "bold", mb: 4, textAlign: "center" }}
-      >
-        💰 Smart Calculator
-      </Typography>
-
       <Card elevation={3} sx={{ mb: 3 }}>
         <CardContent>
           <Typography variant="h6" gutterBottom sx={{ mb: 3 }}>
@@ -83,7 +86,7 @@ export const Content = () => {
             </ToggleButton> */}
             <ToggleButton value="split_users">
               <PeopleIcon sx={{ mr: 1 }} />
-              ແບ່ງຜູ້ໃຊ້
+              ຫານກັບໝູ່
             </ToggleButton>
           </ToggleButtonGroup>
 
@@ -94,27 +97,28 @@ export const Content = () => {
               <Stack spacing={3}>
                 <TextField
                   label="ຈຳນວນເງິນທັງໝົດ"
-                  type="number"
-                  value={totalAmount}
-                  onChange={(e) => handleTotalAmountChange(e.target.value)}
+                  value={formatMoneyInput(totalAmount)}
+                  onChange={(e) =>
+                    handleTotalAmountChange(parseMoneyInput(e.target.value))
+                  }
                   fullWidth
                   variant="outlined"
                   InputProps={{
                     startAdornment: <Typography sx={{ mr: 1 }}>ກີບ</Typography>,
                   }}
+                  inputProps={{ inputMode: "numeric" }}
                   helperText="ປ້ອນຈຳນວນເງິນທັງໝົດ"
                 />
 
                 <TextField
                   label="ຈຳນວນຄົນທັງໝົດ"
-                  type="number"
                   value={userAmount}
-                  onChange={(e) => handleUserAmountChange(e.target.value)}
+                  onChange={(e) =>
+                    handleUserAmountChange(e.target.value.replace(/\D/g, ""))
+                  }
                   fullWidth
                   variant="outlined"
-                  InputProps={{
-                    startAdornment: <Typography sx={{ mr: 1 }}>ກີບ</Typography>,
-                  }}
+                  inputProps={{ inputMode: "numeric" }}
                   helperText="ປ້ອນຈຳນວນຄົນທັງໝົດ"
                 />
               </Stack>
@@ -207,55 +211,61 @@ export const Content = () => {
               {error}
             </Alert>
           )}
+
+          {/* Save and Clear buttons - inside card */}
+          <Stack
+            direction="row"
+            spacing={2}
+            justifyContent="end"
+            sx={{ mt: 3, pt: 3, borderTop: 1, borderColor: "divider" }}
+          >
+            {calculationType === "split_users" ? (
+              <Button
+                variant="contained"
+                color="primary"
+                startIcon={
+                  loading ? (
+                    <CircularProgress size={20} color="inherit" />
+                  ) : (
+                    <SaveIcon />
+                  )
+                }
+                onClick={saveSplitToFirebase}
+                disabled={users.length === 0 || loading}
+                size="large"
+              >
+                ບັນທຶກການຫານກັບໝູ່
+              </Button>
+            ) : (
+              <Button
+                variant="contained"
+                color="primary"
+                startIcon={
+                  loading ? (
+                    <CircularProgress size={20} color="inherit" />
+                  ) : (
+                    <SaveIcon />
+                  )
+                }
+                onClick={saveToHistory}
+                disabled={!result || loading}
+                size="large"
+              >
+                ບັນທຶກການຄິດໄລ່
+              </Button>
+            )}
+            <Button
+              variant="outlined"
+              color="error"
+              startIcon={<ClearIcon />}
+              onClick={clearCalculation}
+              size="large"
+            >
+              ລ້າງ
+            </Button>
+          </Stack>
         </CardContent>
       </Card>
-
-      <Stack direction="row" spacing={2} justifyContent="center">
-        {calculationType === "split_users" ? (
-          <Button
-            variant="contained"
-            color="primary"
-            startIcon={
-              loading ? (
-                <CircularProgress size={20} color="inherit" />
-              ) : (
-                <SaveIcon />
-              )
-            }
-            onClick={saveSplitToFirebase}
-            disabled={users.length === 0 || loading}
-            size="large"
-          >
-            ບັນທຶກການແບ່ງຜູ້ໃຊ້
-          </Button>
-        ) : (
-          <Button
-            variant="contained"
-            color="primary"
-            startIcon={
-              loading ? (
-                <CircularProgress size={20} color="inherit" />
-              ) : (
-                <SaveIcon />
-              )
-            }
-            onClick={saveToHistory}
-            disabled={!result || loading}
-            size="large"
-          >
-            ບັນທຶກການຄິດໄລ່
-          </Button>
-        )}
-        <Button
-          variant="outlined"
-          color="secondary"
-          startIcon={<ClearIcon />}
-          onClick={clearCalculation}
-          size="large"
-        >
-          ລ້າງ
-        </Button>
-      </Stack>
     </Box>
   );
 };

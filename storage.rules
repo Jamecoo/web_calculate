@@ -1,0 +1,35 @@
+rules_version = '2';
+
+// Cloud Storage rules for Splitzy.
+//
+// Avatars live at avatars/{uid}.<ext>. Anyone signed in may read avatars
+// (so they show up in shared bills/history), but a user may only write their
+// own avatar, and only reasonably-sized image files.
+//
+// Deploy with:  firebase deploy --only storage
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    match /avatars/{fileName} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null
+        && fileName.matches(request.auth.uid + '\\..*')
+        && request.resource.size < 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+    }
+
+    // Trip payment slips. Any signed-in user may read/upload an image slip;
+    // trip-level access is enforced by the app + Firestore rules.
+    match /slips/{splitId}/{fileName} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null
+        && request.resource.size < 10 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+    }
+
+    // Deny everything else by default.
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

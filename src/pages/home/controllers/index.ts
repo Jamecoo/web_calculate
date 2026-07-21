@@ -3,15 +3,17 @@ import { collection, addDoc, serverTimestamp, doc, updateDoc } from 'firebase/fi
 import type { CalculationResult, CalculationType, Purchase, UserShare } from '../../../model/calculateModel'
 import { db } from '../../../firebase'
 import Swal from 'sweetalert2'
+import {
+  computeUserTotals,
+  calculateSettlements as calcSettlements,
+  type Settlement,
+} from '../../../utils/splitCalculations'
+import useAuth from '../../../context/auth'
 
-// Settlement type to show who owes whom
-export interface Settlement {
-  from: string // User who needs to pay
-  to: string   // User who should receive
-  amount: number
-}
+export type { Settlement }
 
 const useMainController = () => {
+  const { user } = useAuth()
   const [totalAmount, setTotalAmount] = useState<string>('')
   const [userAmount, setUserAmount] = useState<string>('')
   const [calculationType, setCalculationType] = useState<CalculationType>('divide')
@@ -20,11 +22,16 @@ const useMainController = () => {
   const [error, setError] = useState<string>('')
 
   // Split users state
+  const [tripName, setTripName] = useState<string>('')
   const [totalUsers, setTotalUsers] = useState<string>('')
   const [userNames, setUserNames] = useState<string[]>([])
   const [users, setUsers] = useState<UserShare[]>([])
   const [currentSplitId, setCurrentSplitId] = useState<string | null>(null)
-  const [step, setStep] = useState<'setup' | 'calculate'>('setup')
+  const [step, setStep] = useState<'setup' | 'expenses'>('setup')
+
+  const handleTripNameChange = (value: string) => {
+    setTripName(value)
+  }
 
   const handleTotalAmountChange = (value: string) => {
     setTotalAmount(value)
@@ -64,25 +71,17 @@ const useMainController = () => {
     setUserNames(newNames)
   }
 
-  const startCalculation = () => {
-    const totalNum = parseFloat(totalAmount)
+  // Setup -> Expenses: only the number of people (and their names) is required.
+  // The total amount and each person's fair share are derived later from the
+  // expenses that get logged on the expenses page.
+  const proceedToExpenses = () => {
     const usersNum = parseInt(totalUsers)
-
-    if (isNaN(totalNum) || totalNum <= 0) {
-      Swal.fire({
-        icon: 'error',
-        title: 'ຂໍ້ຜິດພາດ',
-        text: 'ກະລຸນາປ້ອນຈຳນວນເງິນທີ່ຖືກຕ້ອງ',
-        confirmButtonText: 'ຕົກລົງ'
-      })
-      return
-    }
 
     if (isNaN(usersNum) || usersNum <= 0) {
       Swal.fire({
         icon: 'error',
         title: 'ຂໍ້ຜິດພາດ',
-        text: 'ກະລຸນາປ້ອນຈຳນວນຜູ້ໃຊ້ທີ່ຖືກຕ້ອງ',
+        text: 'ກະລຸນາປ້ອນຈຳນວນຄົນທີ່ຖືກຕ້ອງ',
         confirmButtonText: 'ຕົກລົງ'
       })
       return
@@ -99,18 +98,16 @@ const useMainController = () => {
       return
     }
 
-    const perUserAmount = totalNum / usersNum
-
     const newUsers: UserShare[] = userNames.map((name, index) => ({
       userId: `user_${index + 1}`,
       userName: name.trim(),
-      initialShare: perUserAmount,
-      currentBalance: perUserAmount,
+      initialShare: 0,
+      currentBalance: 0,
       purchases: []
     }))
 
     setUsers(newUsers)
-    setStep('calculate')
+    setStep('expenses')
     setError('')
   }
 
@@ -119,55 +116,30 @@ const useMainController = () => {
     setUsers([])
   }
 
-  // Calculate settlements - who owes whom
-  const calculateSettlements = (): Settlement[] => {
-    if (users.length === 0) return []
+  // Calculate settlements - who owes whom (shared pure util)
+  const calculateSettlements = (): Settlement[] => calcSettlements(users)
 
-    // Separate users into creditors (negative balance - should receive) and debtors (positive balance - should pay)
-    const creditors = users.filter(u => u.currentBalance < 0).map(u => ({
-      userName: u.userName,
-      amount: Math.abs(u.currentBalance)
-    }))
-
-    const debtors = users.filter(u => u.currentBalance > 0).map(u => ({
-      userName: u.userName,
-      amount: u.currentBalance
-    }))
-
-    const settlements: Settlement[] = []
-    let i = 0, j = 0
-
-    // Match creditors with debtors
-    while (i < creditors.length && j < debtors.length) {
-      const creditor = creditors[i]
-      const debtor = debtors[j]
-      
-      const settleAmount = Math.min(creditor.amount, debtor.amount)
-      
-      if (settleAmount > 0.01) { // Ignore very small amounts
-        settlements.push({
-          from: debtor.userName,
-          to: creditor.userName,
-          amount: settleAmount
-        })
-      }
-
-      creditor.amount -= settleAmount
-      debtor.amount -= settleAmount
-
-      if (creditor.amount < 0.01) i++
-      if (debtor.amount < 0.01) j++
-    }
-
-    return settlements
-  }
-
-  const addPurchase = async (userIndex: number, itemName: string, amount: number) => {
+  const addPurchase = async (
+    userIndex: number,
+    itemName: string,
+    amount: number,
+    consumers: string[]
+  ) => {
     if (amount <= 0) {
       Swal.fire({
         icon: 'error',
         title: 'ຂໍ້ຜິດພາດ',
         text: 'ຈຳນວນເງິນຕ້ອງຫຼາຍກວ່າ 0',
+        confirmButtonText: 'ຕົກລົງ'
+      })
+      return
+    }
+
+    if (!consumers || consumers.length === 0) {
+      Swal.fire({
+        icon: 'warning',
+        title: 'ແຈ້ງເຕືອນ',
+        text: 'ກະລຸນາເລືອກຢ່າງໜ້ອຍ 1 ຄົນທີ່ຮ່ວມໃຊ້ລາຍການນີ້',
         confirmButtonText: 'ຕົກລົງ'
       })
       return
@@ -179,27 +151,30 @@ const useMainController = () => {
       id: `purchase_${Date.now()}`,
       itemName,
       amount,
+      consumers,
       timestamp: new Date() as any
     }
 
-    const newBalance = user.currentBalance - amount
-    const updatedUsers = [...users]
-    updatedUsers[userIndex] = {
+    const usersWithNewPurchase = [...users]
+    usersWithNewPurchase[userIndex] = {
       ...user,
-      currentBalance: newBalance,
       purchases: [...user.purchases, newPurchase]
     }
+
+    // Recalculate everyone's paid/consumed/balance from all itemised purchases
+    const updatedUsers = computeUserTotals(usersWithNewPurchase)
 
     setUsers(updatedUsers)
     setError('')
 
     // Show success message with appropriate info
-    let message = 'ເພີ່ມລາຍການຊື້ສຳເລັດແລ້ວ'
-    
+    const newBalance = updatedUsers[userIndex].currentBalance
+    let message = 'ເພີ່ມລາຍຈ່າຍສຳເລັດແລ້ວ'
+
     // If balance is negative, user should receive money back
     if (newBalance < 0) {
       const amountToReceive = Math.abs(newBalance)
-      message = `${user.userName} ຊື້ເກີນສ່ວນແບ່ງ, ຄວນໄດ້ຮັບເງິນຄືນ ${amountToReceive.toLocaleString()} ກີບ`
+      message = `${user.userName} ຈ່າຍເກີນສ່ວນແບ່ງ, ຄວນໄດ້ຮັບເງິນຄືນ ${amountToReceive.toLocaleString()} ກີບ`
     }
 
     await Swal.fire({
@@ -220,6 +195,103 @@ const useMainController = () => {
     }
   }
 
+  const editPurchase = async (
+    userIndex: number,
+    purchaseId: string,
+    itemName: string,
+    amount: number,
+    consumers: string[]
+  ) => {
+    if (amount <= 0) {
+      Swal.fire({
+        icon: 'error',
+        title: 'ຂໍ້ຜິດພາດ',
+        text: 'ຈຳນວນເງິນຕ້ອງຫຼາຍກວ່າ 0',
+        confirmButtonText: 'ຕົກລົງ'
+      })
+      return
+    }
+
+    if (!consumers || consumers.length === 0) {
+      Swal.fire({
+        icon: 'warning',
+        title: 'ແຈ້ງເຕືອນ',
+        text: 'ກະລຸນາເລືອກຢ່າງໜ້ອຍ 1 ຄົນທີ່ຮ່ວມໃຊ້ລາຍການນີ້',
+        confirmButtonText: 'ຕົກລົງ'
+      })
+      return
+    }
+
+    const usersWithEditedPurchase = users.map((user, idx) => {
+      if (idx !== userIndex) return user
+      return {
+        ...user,
+        purchases: user.purchases.map((p) =>
+          p.id === purchaseId
+            ? { ...p, itemName, amount, consumers }
+            : p
+        )
+      }
+    })
+
+    const updatedUsers = computeUserTotals(usersWithEditedPurchase)
+    setUsers(updatedUsers)
+
+    await Swal.fire({
+      icon: 'success',
+      title: 'ສຳເລັດ',
+      text: 'ແກ້ໄຂລາຍຈ່າຍສຳເລັດແລ້ວ',
+      confirmButtonText: 'ຕົກລົງ',
+      timer: 1500,
+      showConfirmButton: false
+    })
+
+    if (currentSplitId) {
+      try {
+        await updateDoc(doc(db, 'user_splits', currentSplitId), {
+          users: updatedUsers
+        })
+      } catch (err) {
+        console.error('Error updating purchase:', err)
+      }
+    }
+  }
+
+  const deletePurchase = async (userIndex: number, purchaseId: string) => {
+    const result = await Swal.fire({
+      icon: 'warning',
+      title: 'ຢືນຢັນການລຶບ',
+      text: 'ທ່ານແນ່ໃຈບໍ່ວ່າຕ້ອງການລຶບລາຍຈ່າຍນີ້?',
+      showCancelButton: true,
+      confirmButtonText: 'ລຶບ',
+      cancelButtonText: 'ຍົກເລີກ',
+      confirmButtonColor: '#d33'
+    })
+
+    if (!result.isConfirmed) return
+
+    const usersWithDeletedPurchase = users.map((user, idx) => {
+      if (idx !== userIndex) return user
+      return {
+        ...user,
+        purchases: user.purchases.filter((p) => p.id !== purchaseId)
+      }
+    })
+
+    const updatedUsers = computeUserTotals(usersWithDeletedPurchase)
+    setUsers(updatedUsers)
+
+    if (currentSplitId) {
+      try {
+        await updateDoc(doc(db, 'user_splits', currentSplitId), {
+          users: updatedUsers
+        })
+      } catch (err) {
+        console.error('Error deleting purchase:', err)
+      }
+    }
+  }
+
   const saveSplitToFirebase = async () => {
     if (users.length === 0) {
       Swal.fire({
@@ -234,15 +306,25 @@ const useMainController = () => {
     setLoading(true)
     try {
       const settlements = calculateSettlements()
-      
+      const computedTotalAmount = users.reduce(
+        (sum, u) => sum + u.purchases.reduce((s, p) => s + p.amount, 0),
+        0
+      )
+      const perUserAmount = computedTotalAmount / users.length
+
       const docRef = await addDoc(collection(db, 'user_splits'), {
-        totalAmount: parseFloat(totalAmount),
+        tripName: tripName.trim(),
+        userId: user?.uid ?? 'anonymous',
+        userEmail: user?.email ?? '',
+        userName: user?.displayName ?? user?.email ?? '',
+        totalAmount: computedTotalAmount,
         totalUsers: users.length,
-        perUserAmount: users[0].initialShare,
+        perUserAmount,
         users: users,
         settlements: settlements,
         timestamp: serverTimestamp(),
-        calculationType: 'split_users'
+        calculationType: 'split_users',
+        memberEmails: [] // Initialize empty array for sharing
       })
 
       setCurrentSplitId(docRef.id)
@@ -250,7 +332,7 @@ const useMainController = () => {
       await Swal.fire({
         icon: 'success',
         title: 'ສຳເລັດ',
-        text: 'ບັນທຶກການແບ່ງຜູ້ໃຊ້ສຳເລັດແລ້ວ',
+        text: 'ບັນທຶກການຫານກັບໝູ່ສຳເລັດແລ້ວ',
         confirmButtonText: 'ຕົກລົງ'
       })
     } catch (err) {
@@ -336,7 +418,9 @@ const useMainController = () => {
     setLoading(true)
     try {
       await addDoc(collection(db, 'calculation_history'), {
-        userId: 'anonymous',
+        userId: user?.uid ?? 'anonymous',
+        userEmail: user?.email ?? '',
+        userName: user?.displayName ?? user?.email ?? '',
         totalAmount: result.totalAmount,
         userAmount: result.userAmount,
         result: result.result,
@@ -385,6 +469,7 @@ const useMainController = () => {
   const clearCalculation = () => {
     setTotalAmount('')
     setUserAmount('')
+    setTripName('')
     setTotalUsers('')
     setUserNames([])
     setUsers([])
@@ -401,6 +486,7 @@ const useMainController = () => {
     result,
     loading,
     error,
+    tripName,
     totalUsers,
     userNames,
     users,
@@ -408,11 +494,14 @@ const useMainController = () => {
     handleTotalAmountChange,
     handleUserAmountChange,
     handleCalculationTypeChange,
+    handleTripNameChange,
     handleTotalUsersChange,
     handleUserNameChange,
-    startCalculation,
+    proceedToExpenses,
     backToSetup,
     addPurchase,
+    editPurchase,
+    deletePurchase,
     saveSplitToFirebase,
     saveToHistory,
     clearCalculation,

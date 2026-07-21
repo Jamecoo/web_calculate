@@ -7,18 +7,36 @@ export interface UserShare {
   userName: string
   initialShare: number
   currentBalance: number
+  paid?: number
+  consumed?: number
   purchases: Purchase[]
+  isPaid?: boolean
 }
 
 export interface Purchase {
   id: string
   itemName: string
   amount: number
+  consumers?: string[]
+  timestamp: Timestamp
+}
+
+// A payment slip (transfer screenshot) uploaded to a shared trip.
+export interface TripSlip {
+  id: string
+  imageUrl: string
+  uploadedByEmail: string
   timestamp: Timestamp
 }
 
 // For split among users calculation
 export interface SplitCalculationDocument {
+  tripName?: string
+  userId?: string
+  userEmail?: string
+  userName?: string
+  memberEmails?: string[]
+  slips?: TripSlip[]
   totalAmount: number
   totalUsers: number
   perUserAmount: number
@@ -75,18 +93,28 @@ export interface UserShare {
   userName: string
   initialShare: number
   currentBalance: number
+  paid?: number
+  consumed?: number
   purchases: Purchase[]
+  isPaid?: boolean
 }
 
 export interface Purchase {
   id: string
   itemName: string
   amount: number
+  consumers?: string[]
   timestamp: Timestamp
 }
 
 // For split among users calculation
 export interface SplitCalculationDocument {
+  tripName?: string
+  userId?: string
+  userEmail?: string
+  userName?: string
+  memberEmails?: string[]
+  slips?: TripSlip[]
   totalAmount: number
   totalUsers: number
   perUserAmount: number

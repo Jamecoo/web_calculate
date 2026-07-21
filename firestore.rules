@@ -1,0 +1,77 @@
+rules_version = '2';
+
+// Firestore security rules for Splitzy.
+//
+// Model: every document in `user_splits` and `calculation_history` carries a
+// `userId` field (the Firebase Auth uid of its owner). A regular signed-in user
+// may only read/write their own documents; admins (matched by email) may read
+// and delete everything.
+//
+// IMPORTANT: keep the admin email list here in sync with
+// src/constants/admins.ts. Deploy with:  firebase deploy --only firestore:rules
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn()
+        && request.auth.token.email in [
+          'thadsaphone9977@gmail.com'
+        ];
+    }
+
+    // Owner of the existing document.
+    function ownsExisting() {
+      return isSignedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    // Owner asserted on the incoming document (create/update).
+    function ownsIncoming() {
+      return isSignedIn() && request.resource.data.userId == request.auth.uid;
+    }
+
+    // A member the trip has been shared with (by email).
+    function isTripMember() {
+      return isSignedIn()
+        && ('memberEmails' in resource.data)
+        && (request.auth.token.email in resource.data.memberEmails);
+    }
+
+    // Check if user is only adding their own email to memberEmails (self-join via QR code)
+    function isSelfJoin() {
+      return isSignedIn()
+        && request.resource.data.userId == resource.data.userId  // not changing owner
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberEmails'])  // only changing memberEmails
+        && request.resource.data.memberEmails.hasAll(resource.data.memberEmails)  // not removing anyone
+        && request.auth.token.email in request.resource.data.memberEmails;  // adding themselves
+    }
+
+    match /user_splits/{docId} {
+      // Any signed-in user can read (needed for QR code join flow to see trip details)
+      allow read: if isSignedIn();
+      // Owner or admin creates the trip.
+      allow create: if ownsIncoming() || isAdmin();
+      // Owner, admin, member, or self-join may update.
+      allow update: if isAdmin()
+        || ownsExisting()
+        || (isTripMember() && request.resource.data.userId == resource.data.userId)
+        || isSelfJoin();
+      // Only owner or admin may delete the trip.
+      allow delete: if ownsExisting() || isAdmin();
+    }
+
+    match /calculation_history/{docId} {
+      allow read, delete: if ownsExisting() || isAdmin();
+      allow create: if ownsIncoming() || isAdmin();
+      allow update: if ownsExisting() || isAdmin();
+    }
+
+    // Everything else is denied by default.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
