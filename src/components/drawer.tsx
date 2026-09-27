@@ -33,10 +33,18 @@ import {
   History as HistoryIcon,
   BarChart as BarChartIcon,
   AccountBalanceWallet as WalletIcon,
+  NoteAdd,
 } from "@mui/icons-material";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import Swal from "sweetalert2";
-import { HOME_PATH, REPORT_PATH, COST_REPORT_PATH, BALANCES_PATH, PROFILE_PATH } from "../router/path";
+import {
+  HOME_PATH,
+  REPORT_PATH,
+  COST_REPORT_PATH,
+  BALANCES_PATH,
+  PROFILE_PATH,
+  REALTIME_NOTE,
+} from "../router/path";
 import { JINDA_LOGO } from "../contants/logo";
 import useAuth from "../context/auth";
 import { logout } from "../services/auth.services";
@@ -58,11 +66,16 @@ const navItems: NavItem[] = [
     icon: <ReportIcon />,
     subItems: [
       { text: "ປະຫວັດທຣິບ", path: REPORT_PATH, icon: <HistoryIcon /> },
-      { text: "ລາຍງານຄ່າໃຊ້ຈ່າຍ", path: COST_REPORT_PATH, icon: <BarChartIcon /> },
+      {
+        text: "ລາຍງານຄ່າໃຊ້ຈ່າຍ",
+        path: COST_REPORT_PATH,
+        icon: <BarChartIcon />,
+      },
       { text: "ຍອດລວມທຸກທຣິບ", path: BALANCES_PATH, icon: <WalletIcon /> },
     ],
   },
   { text: "ໂປຣໄຟລ໌", path: PROFILE_PATH, icon: <PersonIcon /> },
+  { text: "ຕິດໜີ້", path: REALTIME_NOTE, icon: <NoteAdd /> },
 ];
 
 interface AppDrawerProps {
@@ -101,9 +114,7 @@ const AppDrawer = ({ children }: AppDrawerProps) => {
   };
 
   const drawerContent = (
-    <Box
-      sx={{ display: "flex", flexDirection: "column", height: "100%" }}
-    >
+    <Box sx={{ display: "flex", flexDirection: "column", height: "100%" }}>
       <Toolbar sx={{ height: "auto" }}>
         <Box
           sx={{
@@ -127,7 +138,7 @@ const AppDrawer = ({ children }: AppDrawerProps) => {
           // Item with subItems (expandable menu)
           if (item.subItems) {
             const isAnySubItemActive = item.subItems.some(
-              (sub) => location.pathname === sub.path
+              (sub) => location.pathname === sub.path,
             );
             return (
               <Box key={item.text}>
@@ -196,7 +207,9 @@ const AppDrawer = ({ children }: AppDrawerProps) => {
               src={user?.photoURL || undefined}
               sx={{ width: 36, height: 36, bgcolor: "primary.main" }}
             >
-              {(user?.displayName || user?.email || "?").charAt(0).toUpperCase()}
+              {(user?.displayName || user?.email || "?")
+                .charAt(0)
+                .toUpperCase()}
             </Avatar>
             <Box sx={{ minWidth: 0 }}>
               <Tooltip title={user?.email || ""}>

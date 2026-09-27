@@ -1,10 +1,19 @@
 import { Routes, Route, Navigate } from "react-router-dom";
-import { HOME_PATH, REPORT_PATH, COST_REPORT_PATH, BALANCES_PATH, LOGIN_PATH, PROFILE_PATH } from "./path";
+import {
+  HOME_PATH,
+  REPORT_PATH,
+  COST_REPORT_PATH,
+  BALANCES_PATH,
+  LOGIN_PATH,
+  PROFILE_PATH,
+  REALTIME_NOTE,
+} from "./path";
 import { HomePage } from "../pages/home";
 import { HistorysPage } from "../pages/historys";
 import { CostReportPage } from "../pages/cost-report";
 import { BalancesPage } from "../pages/balances";
 import { ProfilePage } from "../pages/profile";
+import RealtimeNotePages from "../pages/realtime-note";
 
 const AppRouter = () => {
   return (
@@ -19,6 +28,7 @@ const AppRouter = () => {
       <Route path={COST_REPORT_PATH} element={<CostReportPage />} />
       <Route path={BALANCES_PATH} element={<BalancesPage />} />
       <Route path={PROFILE_PATH} element={<ProfilePage />} />
+      <Route path={REALTIME_NOTE} element={<RealtimeNotePages />} />
 
       {/* 404 Not Found */}
       <Route path="*" element={<div>404 - Page Not Found</div>} />

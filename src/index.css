@@ -13,3 +13,7 @@ body {
 .swal2-container {
   z-index: 1500 !important;
 }
+
+.swal2-popup, .swal2-title, .swal2-html-container {
+  font-family: 'Noto Sans Lao', sans-serif !important;
+}
