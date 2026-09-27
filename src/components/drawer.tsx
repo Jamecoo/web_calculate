@@ -32,10 +32,11 @@ import {
   ExpandMore,
   History as HistoryIcon,
   BarChart as BarChartIcon,
+  AccountBalanceWallet as WalletIcon,
 } from "@mui/icons-material";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import Swal from "sweetalert2";
-import { HOME_PATH, REPORT_PATH, COST_REPORT_PATH, PROFILE_PATH } from "../router/path";
+import { HOME_PATH, REPORT_PATH, COST_REPORT_PATH, BALANCES_PATH, PROFILE_PATH } from "../router/path";
 import { JINDA_LOGO } from "../contants/logo";
 import useAuth from "../context/auth";
 import { logout } from "../services/auth.services";
@@ -58,6 +59,7 @@ const navItems: NavItem[] = [
     subItems: [
       { text: "ປະຫວັດທຣິບ", path: REPORT_PATH, icon: <HistoryIcon /> },
       { text: "ລາຍງານຄ່າໃຊ້ຈ່າຍ", path: COST_REPORT_PATH, icon: <BarChartIcon /> },
+      { text: "ຍອດລວມທຸກທຣິບ", path: BALANCES_PATH, icon: <WalletIcon /> },
     ],
   },
   { text: "ໂປຣໄຟລ໌", path: PROFILE_PATH, icon: <PersonIcon /> },

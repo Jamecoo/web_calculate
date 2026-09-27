@@ -18,6 +18,8 @@ import {
   Alert,
   Tabs,
   Tab,
+  ToggleButtonGroup,
+  ToggleButton,
   TextField,
   FormControl,
   InputLabel,
@@ -40,6 +42,7 @@ import {
   ArrowForward as ArrowForwardIcon,
   AccountBalance as MoneyIcon,
   Share as ShareIcon,
+  NotificationsActive as RemindIcon,
   PictureAsPdf as PdfIcon,
   Image as ImageIcon,
   PersonOutline as PersonIcon,
@@ -61,7 +64,14 @@ import {
 } from "../../../utils/splitCalculations";
 import useMainControllerContext from "../context";
 import useAuth from "../../../context/auth";
+import Swal from "sweetalert2";
 import useShareableBill from "./useShareBill";
+import {
+  EXPENSE_CATEGORIES,
+  DEFAULT_CATEGORY_ID,
+  getCategory,
+} from "../../../constants/categories";
+import { buildReminderMessage, shareReminder } from "../../../utils/reminder";
 import { STORAGE_ENABLED } from "../../../constants/features";
 
 export const HistoryContent = () => {
@@ -88,6 +98,7 @@ export const HistoryContent = () => {
     deleteExpense,
     addParticipant,
     removeParticipant,
+    ensureTripInvite,
   } = useMainControllerContext();
 
   const { user, isAdmin } = useAuth();
@@ -103,6 +114,7 @@ export const HistoryContent = () => {
   const [expenseItem, setExpenseItem] = useState("");
   const [expenseAmount, setExpenseAmount] = useState("");
   const [expenseConsumers, setExpenseConsumers] = useState<string[]>([]);
+  const [expenseCategory, setExpenseCategory] = useState<string>(DEFAULT_CATEGORY_ID);
 
   // --- edit trip name state ---
   const [editingTripName, setEditingTripName] = useState(false);
@@ -116,6 +128,7 @@ export const HistoryContent = () => {
   const [editExpenseItem, setEditExpenseItem] = useState("");
   const [editExpenseAmount, setEditExpenseAmount] = useState("");
   const [editExpenseConsumers, setEditExpenseConsumers] = useState<string[]>([]);
+  const [editExpenseCategory, setEditExpenseCategory] = useState<string>(DEFAULT_CATEGORY_ID);
 
   // --- add participant state ---
   const [newParticipantName, setNewParticipantName] = useState("");
@@ -130,6 +143,7 @@ export const HistoryContent = () => {
     setExpenseItem("");
     setExpenseAmount("");
     setExpenseConsumers(ids);
+    setExpenseCategory(DEFAULT_CATEGORY_ID);
     setExpenseOpen(true);
   };
 
@@ -147,7 +161,8 @@ export const HistoryContent = () => {
       expensePayer,
       expenseItem,
       isNaN(amount) ? 0 : amount,
-      expenseConsumers
+      expenseConsumers,
+      expenseCategory
     );
     if (ok) setExpenseOpen(false);
   };
@@ -173,11 +188,12 @@ export const HistoryContent = () => {
   // --- Edit expense handlers ---
   const startEditExpense = (
     userId: string,
-    purchase: { id: string; itemName: string; amount: number; consumers?: string[] }
+    purchase: { id: string; itemName: string; amount: number; consumers?: string[]; category?: string }
   ) => {
     setEditingExpense({ userId, purchaseId: purchase.id });
     setEditExpenseItem(purchase.itemName);
     setEditExpenseAmount(String(purchase.amount));
+    setEditExpenseCategory(purchase.category || DEFAULT_CATEGORY_ID);
     // If consumers is not defined, default to all users in the split
     const consumers = purchase.consumers || selectedSplit?.users.map((u: UserShare) => u.userId) || [];
     setEditExpenseConsumers(consumers);
@@ -192,7 +208,8 @@ export const HistoryContent = () => {
       editingExpense.purchaseId,
       editExpenseItem,
       isNaN(amount) ? 0 : amount,
-      editExpenseConsumers
+      editExpenseConsumers,
+      editExpenseCategory
     );
     if (ok) setEditingExpense(null);
   };
@@ -202,6 +219,7 @@ export const HistoryContent = () => {
     setEditExpenseItem("");
     setEditExpenseAmount("");
     setEditExpenseConsumers([]);
+    setEditExpenseCategory(DEFAULT_CATEGORY_ID);
   };
 
   const toggleEditExpenseConsumer = (id: string) => {
@@ -258,6 +276,53 @@ export const HistoryContent = () => {
 
   const handleOpenQrDialog = () => {
     setQrDialogOpen(true);
+    // Publishes the name-only preview the link resolves against; a no-op for
+    // anyone who is not the trip owner.
+    if (selectedSplit) {
+      ensureTripInvite(selectedSplit.id).catch((err: unknown) =>
+        console.error("Error publishing trip invite:", err)
+      );
+    }
+  };
+
+  // Nudge whoever still owes money, through the phone's share sheet.
+  const handleSendReminder = async (settlement: {
+    from: string;
+    to: string;
+    amount: number;
+  }) => {
+    if (!selectedSplit) return;
+    const message = buildReminderMessage({
+      tripName: selectedSplit.tripName,
+      from: settlement.from,
+      to: settlement.to,
+      amount: settlement.amount,
+      link: getTripShareLink(selectedSplit.id),
+    });
+
+    const outcome = await shareReminder(message);
+    if (outcome === "cancelled") return;
+
+    if (outcome === "failed") {
+      await Swal.fire({
+        icon: "error",
+        title: "ຂໍ້ຜິດພາດ",
+        text: "ບໍ່ສາມາດສົ່ງການແຈ້ງເຕືອນໄດ້",
+        confirmButtonText: "ຕົກລົງ",
+      });
+      return;
+    }
+
+    await Swal.fire({
+      icon: "success",
+      title: outcome === "shared" ? "ສົ່ງແລ້ວ" : "ຄັດລອກແລ້ວ",
+      text:
+        outcome === "shared"
+          ? "ສົ່ງການແຈ້ງເຕືອນແລ້ວ"
+          : "ຄັດລອກຂໍ້ຄວາມແລ້ວ ແປະໄປໃສ່ໃນແອບແຊທໄດ້ເລົຢ",
+      timer: 1800,
+      showConfirmButton: false,
+    });
   };
 
   const handleCloseQrDialog = () => {
@@ -777,14 +842,31 @@ export const HistoryContent = () => {
                                     <strong>{settlement.from}</strong> ຕ້ອງຈ່າຍໃຫ້{" "}
                                     <strong>{settlement.to}</strong>
                                   </Typography>
-                                  <Chip
-                                    label={formatLaoKipWithCurrency(
-                                      settlement.amount
-                                    )}
-                                    color="primary"
-                                    size="small"
-                                    sx={{ fontWeight: "bold" }}
-                                  />
+                                  <Stack
+                                    direction="row"
+                                    spacing={0.5}
+                                    alignItems="center"
+                                  >
+                                    <Chip
+                                      label={formatLaoKipWithCurrency(
+                                        settlement.amount
+                                      )}
+                                      color="primary"
+                                      size="small"
+                                      sx={{ fontWeight: "bold" }}
+                                    />
+                                    <Tooltip title="ສົ່ງການແຈ້ງເຕືອນ">
+                                      <IconButton
+                                        size="small"
+                                        color="warning"
+                                        onClick={() =>
+                                          handleSendReminder(settlement)
+                                        }
+                                      >
+                                        <RemindIcon fontSize="small" />
+                                      </IconButton>
+                                    </Tooltip>
+                                  </Stack>
                                 </Box>
                               </Alert>
                             ))}
@@ -1010,6 +1092,26 @@ export const HistoryContent = () => {
                                             onChange={(e) => setEditExpenseAmount(e.target.value)}
                                             inputProps={{ inputMode: "numeric" }}
                                           />
+                                          <ToggleButtonGroup
+                                            value={editExpenseCategory}
+                                            exclusive
+                                            onChange={(_, value) =>
+                                              value && setEditExpenseCategory(value)
+                                            }
+                                            size="small"
+                                            sx={{ flexWrap: "wrap", gap: 0.5 }}
+                                          >
+                                            {EXPENSE_CATEGORIES.map((c) => (
+                                              <ToggleButton
+                                                key={c.id}
+                                                value={c.id}
+                                                sx={{ px: 1, border: "1px solid", borderColor: "divider", borderRadius: 2 }}
+                                              >
+                                                <span style={{ marginRight: 4 }}>{c.emoji}</span>
+                                                {c.label}
+                                              </ToggleButton>
+                                            ))}
+                                          </ToggleButtonGroup>
                                           <FormControl component="fieldset" size="small">
                                             <FormLabel component="legend">ຜູ້ຮັບຜິດຊອບ</FormLabel>
                                             <FormGroup row>
@@ -1059,9 +1161,27 @@ export const HistoryContent = () => {
                                         py: 0.5,
                                       }}
                                     >
-                                      <Typography variant="body2">
-                                        {purchase.itemName}
-                                      </Typography>
+                                      <Box
+                                        sx={{
+                                          display: "flex",
+                                          alignItems: "center",
+                                          gap: 0.5,
+                                          minWidth: 0,
+                                        }}
+                                      >
+                                        <Chip
+                                          size="small"
+                                          label={getCategory(purchase.category).emoji}
+                                          sx={{
+                                            height: 20,
+                                            "& .MuiChip-label": { px: 0.75 },
+                                            bgcolor: `${getCategory(purchase.category).color}22`,
+                                          }}
+                                        />
+                                        <Typography variant="body2" noWrap>
+                                          {purchase.itemName}
+                                        </Typography>
+                                      </Box>
                                       <Stack direction="row" spacing={0.5} alignItems="center">
                                         <Typography variant="body2" color="error">
                                           -{formatLaoKipWithCurrency(purchase.amount)}
@@ -1243,6 +1363,34 @@ export const HistoryContent = () => {
               fullWidth
               placeholder="ເຊັ່ນ: ອາຫານທ່ຽງ, ນ້ຳມັນ"
             />
+
+            <FormControl component="fieldset" variant="standard">
+              <FormLabel component="legend" sx={{ mb: 1 }}>
+                ປະເພດລາຍຈ່າຍ
+              </FormLabel>
+              <ToggleButtonGroup
+                value={expenseCategory}
+                exclusive
+                onChange={(_, value) => value && setExpenseCategory(value)}
+                size="small"
+                sx={{
+                  flexWrap: "wrap",
+                  gap: 0.5,
+                  "& .MuiToggleButton-root": {
+                    borderRadius: 2,
+                    border: "1px solid",
+                    borderColor: "divider",
+                  },
+                }}
+              >
+                {EXPENSE_CATEGORIES.map((c) => (
+                  <ToggleButton key={c.id} value={c.id} sx={{ px: 1.5 }}>
+                    <span style={{ marginRight: 4 }}>{c.emoji}</span>
+                    {c.label}
+                  </ToggleButton>
+                ))}
+              </ToggleButtonGroup>
+            </FormControl>
 
             <TextField
               label="ຈຳນວນເງິນ"

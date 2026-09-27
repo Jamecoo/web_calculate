@@ -7,6 +7,10 @@ rules_version = '2';
 // may only read/write their own documents; admins (matched by email) may read
 // and delete everything.
 //
+// A trip is readable by its owner and by the members it was shared with — NOT
+// by every signed-in user. The QR/link join flow reads `trip_invites/{tripId}`
+// instead, which carries only the trip name and owner, never the amounts.
+//
 // IMPORTANT: keep the admin email list here in sync with
 // src/constants/admins.ts. Deploy with:  firebase deploy --only firestore:rules
 service cloud.firestore {
@@ -50,8 +54,8 @@ service cloud.firestore {
     }
 
     match /user_splits/{docId} {
-      // Any signed-in user can read (needed for QR code join flow to see trip details)
-      allow read: if isSignedIn();
+      // Only the owner, the members it was shared with, or an admin.
+      allow read: if isAdmin() || ownsExisting() || isTripMember();
       // Owner or admin creates the trip.
       allow create: if ownsIncoming() || isAdmin();
       // Owner, admin, member, or self-join may update.
@@ -61,6 +65,24 @@ service cloud.firestore {
         || isSelfJoin();
       // Only owner or admin may delete the trip.
       allow delete: if ownsExisting() || isAdmin();
+    }
+
+    // Public trip preview for the join-by-link flow: name and owner only.
+    // Anyone signed in may read one (they need a trip id to find it), but only
+    // the trip's owner may write it.
+    match /trip_invites/{tripId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn()
+        && request.resource.data.ownerId == request.auth.uid;
+      allow delete: if isAdmin()
+        || (isSignedIn() && resource.data.ownerId == request.auth.uid);
+    }
+
+    // Saved groups of names — private to the user who created them.
+    match /saved_groups/{groupId} {
+      allow read, delete: if ownsExisting() || isAdmin();
+      allow create: if ownsIncoming();
+      allow update: if ownsExisting() && ownsIncoming();
     }
 
     match /calculation_history/{docId} {

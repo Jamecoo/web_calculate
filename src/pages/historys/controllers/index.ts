@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import {
   collection,
   query,
@@ -9,7 +9,6 @@ import {
   deleteDoc,
   arrayUnion,
   arrayRemove,
-  getDoc,
 } from "firebase/firestore";
 import { useSearchParams } from "react-router-dom";
 import { db } from "../../../firebase";
@@ -20,6 +19,12 @@ import {
   computeUserTotals,
   calculateSettlements,
 } from "../../../utils/splitCalculations";
+import {
+  getTripInvite,
+  upsertTripInvite,
+  deleteTripInvite,
+} from "../../../services/trips.service";
+import { DEFAULT_CATEGORY_ID } from "../../../constants/categories";
 
 const tsMillis = (ts: any): number => {
   if (!ts) return 0;
@@ -47,85 +52,88 @@ const useHistoryController = () => {
   const [detailDialog, setDetailDialog] = useState<boolean>(false);
   const [selectedSplit, setSelectedSplit] = useState<any>(null);
 
-  // Handle join link from QR code
+  // Handle join link from QR code.
+  //
+  // The trip document itself is readable only by its owner and members, so the
+  // preview shown here comes from the public `trip_invites` record. Joining is
+  // a self-join write: the rules let a signed-in user add their own email to
+  // memberEmails and change nothing else.
+  const joinHandledRef = useRef<string | null>(null);
+
   useEffect(() => {
     const joinTripId = searchParams.get("join");
     if (!joinTripId || !user || !email) return;
+    if (joinHandledRef.current === joinTripId) return;
+    joinHandledRef.current = joinTripId;
 
     const handleJoinTrip = async () => {
       try {
-        const tripRef = doc(db, "user_splits", joinTripId);
-        const tripSnap = await getDoc(tripRef);
+        const invite = await getTripInvite(joinTripId);
 
-        if (!tripSnap.exists()) {
+        if (!invite) {
           await Swal.fire({
             icon: "error",
-            title: "ບໍ່ພົບທຣິບ",
-            text: "ລິ້ງທຣິບນີ້ບໍ່ຖືກຕ້ອງ ຫຼື ຖືກລຶບແລ້ວ",
+            title: "ບໍ່ພົບທຮິບ",
+            text: "ລິ້ງທຮິບນີ້ບໍ່ຖືກຕ້ອງ ຫຼື ຖືກລຶບແລ້ວ",
             confirmButtonText: "ຕົກລົງ",
           });
           setSearchParams({});
           return;
         }
 
-        const tripData = tripSnap.data();
-        
-        // Check if already owner
-        if (tripData.userId === user.uid) {
+        // Already the owner.
+        if (invite.ownerId === user.uid) {
           await Swal.fire({
             icon: "info",
-            title: "ທ່ານເປັນເຈົ້າຂອງທຣິບນີ້",
-            text: tripData.tripName || "ທຣິບ",
+            title: "ທ່ານເປັນເຈົ້າຢອງທຮິບນີ້",
+            text: invite.tripName || "ທຮິບ",
             confirmButtonText: "ຕົກລົງ",
           });
           setSearchParams({});
           return;
         }
 
-        // Check if already a member
-        const memberEmails = tripData.memberEmails || [];
-        if (memberEmails.includes(email)) {
+        // Already a member: the trip is already in the live shared list.
+        if (sharedSplits.some((t) => t.id === joinTripId)) {
           await Swal.fire({
             icon: "info",
-            title: "ທ່ານຢູ່ໃນທຣິບນີ້ແລ້ວ",
-            text: tripData.tripName || "ທຣິບ",
+            title: "ທ່ານຢູ່ໃນທຮິບນີ້ແລ້ວ",
+            text: invite.tripName || "ທຮິບ",
             confirmButtonText: "ຕົກລົງ",
           });
           setSearchParams({});
           return;
         }
 
-        // Ask to join
         const result = await Swal.fire({
           icon: "question",
-          title: "ເຂົ້າຮ່ວມທຣິບ?",
-          html: `ທ່ານຕ້ອງການເຂົ້າຮ່ວມທຣິບ <strong>${tripData.tripName || "ທຣິບ"}</strong> ບໍ່?`,
+          title: "ເຂົ້າຮ່ວມທຮິບ?",
+          html: `ທ່ານຕ້ອງການເຂົ້າຮ່ວມທຮິບ <strong>${invite.tripName || "ທຮິບ"}</strong> ບໍ່?`,
           showCancelButton: true,
           confirmButtonText: "ເຂົ້າຮ່ວມ",
-          cancelButtonText: "ຍົກເລີກ",
+          cancelButtonText: "ຢົກເລີກ",
         });
 
         if (result.isConfirmed) {
-          await updateDoc(tripRef, {
+          await updateDoc(doc(db, "user_splits", joinTripId), {
             memberEmails: arrayUnion(email),
           });
           await Swal.fire({
             icon: "success",
-            title: "ເຂົ້າຮ່ວມສຳເລັດ!",
-            text: `ທ່ານເຂົ້າຮ່ວມທຣິບ "${tripData.tripName || "ທຣິບ"}" ແລ້ວ`,
+            title: "ເຂົ້າຮ່ວມສໍາເລັບ!",
+            text: `ທ່ານເຂົ້າຮ່ວມທຮິບ "${invite.tripName || "ທຮິບ"}" ແລ້ວ`,
             timer: 2000,
             showConfirmButton: false,
           });
         }
 
-        // Clear the join param
         setSearchParams({});
       } catch (err) {
         console.error("Error joining trip:", err);
         await Swal.fire({
           icon: "error",
           title: "ຂໍ້ຜິດພາດ",
-          text: "ບໍ່ສາມາດເຂົ້າຮ່ວມທຣິບໄດ້",
+          text: "ບໍ່ສາມາດເຂົ້າຮ່ວມທຮິບໄດ້",
           confirmButtonText: "ຕົກລົງ",
         });
         setSearchParams({});
@@ -133,7 +141,7 @@ const useHistoryController = () => {
     };
 
     handleJoinTrip();
-  }, [searchParams, user, email, setSearchParams]);
+  }, [searchParams, user, email, setSearchParams, sharedSplits]);
 
   // Merge owned + shared trips, de-duped by id, pinned first then newest.
   const splitHistory = useMemo(() => {
@@ -314,6 +322,30 @@ const useHistoryController = () => {
     }
   };
 
+  // Publish (or refresh) the public preview a share link resolves against.
+  // Trips created before invites existed get one the first time their owner
+  // opens the QR dialog, so old links keep working.
+  const ensureTripInvite = async (splitId: string, tripName?: string) => {
+    const split = splitHistory.find((s) => s.id === splitId);
+    if (!split || !user) return false;
+    if (split.userId !== user.uid) return false; // only the owner may write it
+
+    try {
+      await upsertTripInvite({
+        tripId: splitId,
+        tripName: (tripName ?? split.tripName ?? "").trim() || "ທຮິບ",
+        ownerId: split.userId,
+        ownerName: split.userName || split.userEmail || "",
+        ownerEmail: split.userEmail || "",
+        memberCount: (split.users || []).length,
+      });
+      return true;
+    } catch (err) {
+      console.error("Error publishing trip invite:", err);
+      return false;
+    }
+  };
+
   // Owner-only: invite a member by email.
   const addMember = async (splitId: string, rawEmail: string) => {
     const memberEmail = rawEmail.trim().toLowerCase();
@@ -384,7 +416,8 @@ const useHistoryController = () => {
     payerUserId: string,
     itemName: string,
     amount: number,
-    consumerIds: string[]
+    consumerIds: string[],
+    category: string = DEFAULT_CATEGORY_ID
   ) => {
     if (!itemName.trim() || amount <= 0 || consumerIds.length === 0) {
       await Swal.fire({
@@ -404,6 +437,7 @@ const useHistoryController = () => {
         itemName: itemName.trim(),
         amount,
         consumers: consumerIds,
+        category,
         timestamp: new Date(),
       };
 
@@ -671,6 +705,7 @@ const useHistoryController = () => {
       await updateDoc(doc(db, "user_splits", splitId), {
         tripName: newName.trim(),
       });
+      await ensureTripInvite(splitId, newName.trim());
       await Swal.fire({
         icon: "success",
         title: "ສຳເລັດ",
@@ -698,7 +733,8 @@ const useHistoryController = () => {
     purchaseId: string,
     newItemName: string,
     newAmount: number,
-    newConsumerIds: string[]
+    newConsumerIds: string[],
+    category: string = DEFAULT_CATEGORY_ID
   ) => {
     if (!newItemName.trim() || newAmount <= 0 || newConsumerIds.length === 0) {
       await Swal.fire({
@@ -724,6 +760,7 @@ const useHistoryController = () => {
                       itemName: newItemName.trim(),
                       amount: newAmount,
                       consumers: newConsumerIds,
+                      category,
                     }
                   : p
               ),
@@ -856,6 +893,12 @@ const useHistoryController = () => {
       const collectionName =
         type === "split" ? "user_splits" : "calculation_history";
       await deleteDoc(doc(db, collectionName, id));
+      if (type === "split") {
+        // The public invite outlives the trip otherwise.
+        await deleteTripInvite(id).catch((err) =>
+          console.error("Error deleting trip invite:", err)
+        );
+      }
 
       await Swal.fire({
         icon: "success",
@@ -928,6 +971,7 @@ const useHistoryController = () => {
     deleteExpense,
     addParticipant,
     removeParticipant,
+    ensureTripInvite,
   };
 };
 

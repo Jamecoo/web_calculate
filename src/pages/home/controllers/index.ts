@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { collection, addDoc, serverTimestamp, doc, updateDoc } from 'firebase/firestore'
-import type { CalculationResult, CalculationType, Purchase, UserShare } from '../../../model/calculateModel'
+import type { CalculationResult, CalculationType, Purchase, SavedGroup, UserShare } from '../../../model/calculateModel'
 import { db } from '../../../firebase'
 import Swal from 'sweetalert2'
 import {
@@ -9,6 +9,14 @@ import {
   type Settlement,
 } from '../../../utils/splitCalculations'
 import useAuth from '../../../context/auth'
+import { upsertTripInvite } from '../../../services/trips.service'
+import {
+  subscribeToGroups,
+  createGroup,
+  deleteGroup,
+  touchGroup,
+} from '../../../services/groups.service'
+import { DEFAULT_CATEGORY_ID } from '../../../constants/categories'
 
 export type { Settlement }
 
@@ -28,6 +36,96 @@ const useMainController = () => {
   const [users, setUsers] = useState<UserShare[]>([])
   const [currentSplitId, setCurrentSplitId] = useState<string | null>(null)
   const [step, setStep] = useState<'setup' | 'expenses'>('setup')
+
+  // Saved groups ("the usual crew") for the setup step.
+  const [savedGroups, setSavedGroups] = useState<SavedGroup[]>([])
+
+  useEffect(() => {
+    if (!user) {
+      setSavedGroups([])
+      return
+    }
+    return subscribeToGroups(user.uid, setSavedGroups)
+  }, [user])
+
+  // Load a saved group's names into the setup step.
+  const applySavedGroup = (group: SavedGroup) => {
+    const names = group.memberNames.filter(Boolean)
+    if (names.length === 0) return
+    setTotalUsers(String(names.length))
+    setUserNames([...names])
+    if (!tripName.trim()) setTripName(group.name)
+    touchGroup(group.id).catch((err) =>
+      console.error('Error updating group usage:', err)
+    )
+  }
+
+  // Save the names currently typed into the setup step as a reusable group.
+  const saveCurrentGroup = async () => {
+    const names = userNames.map((n) => n.trim()).filter(Boolean)
+    if (!user) return
+    if (names.length < 2) {
+      await Swal.fire({
+        icon: 'warning',
+        title: 'ແຈ້ງເຕືອນ',
+        text: 'ຕ້ອງມີຢ່າງໜ້ອຍ 2 ຄົນຈຶ່ງບັນທຶກເປັນກຸ່ມໄດ້',
+        confirmButtonText: 'ຕົກລົງ',
+      })
+      return
+    }
+
+    const { value: groupName } = await Swal.fire({
+      title: 'ບັນທຶກກຸ່ມ',
+      input: 'text',
+      inputLabel: 'ຕັ້ງຊື່ກຸ່ມ',
+      inputValue: tripName.trim(),
+      inputPlaceholder: 'ເຊັ່ນ: ໝູ່ຫ້ອງ, ທີມງານ',
+      showCancelButton: true,
+      confirmButtonText: 'ບັນທຶກ',
+      cancelButtonText: 'ຍົກເລີກ',
+      inputValidator: (value) => (!value?.trim() ? 'ກະລຸນາຕັ້ງຊື່ກຸ່ມ' : undefined),
+    })
+
+    if (!groupName?.trim()) return
+
+    try {
+      await createGroup(user.uid, groupName, names)
+      await Swal.fire({
+        icon: 'success',
+        title: 'ສຳເລັດ',
+        text: `ບັນທຶກກຸ່ມ "${groupName.trim()}" ແລ້ວ`,
+        timer: 1500,
+        showConfirmButton: false,
+      })
+    } catch (err) {
+      console.error('Error saving group:', err)
+      await Swal.fire({
+        icon: 'error',
+        title: 'ຂໍ້ຜິດພາດ',
+        text: 'ບໍ່ສາມາດບັນທຶກກຸ່ມໄດ້',
+        confirmButtonText: 'ຕົກລົງ',
+      })
+    }
+  }
+
+  const removeSavedGroup = async (group: SavedGroup) => {
+    const result = await Swal.fire({
+      icon: 'warning',
+      title: 'ລຶບກຸ່ມ?',
+      text: `ລຶບກຸ່ມ "${group.name}" ອອກຈາກລາຍການບັນທຶກ`,
+      showCancelButton: true,
+      confirmButtonText: 'ລຶບ',
+      cancelButtonText: 'ຍົກເລີກ',
+      confirmButtonColor: '#d33',
+    })
+    if (!result.isConfirmed) return
+
+    try {
+      await deleteGroup(group.id)
+    } catch (err) {
+      console.error('Error deleting group:', err)
+    }
+  }
 
   const handleTripNameChange = (value: string) => {
     setTripName(value)
@@ -123,7 +221,8 @@ const useMainController = () => {
     userIndex: number,
     itemName: string,
     amount: number,
-    consumers: string[]
+    consumers: string[],
+    category: string = DEFAULT_CATEGORY_ID
   ) => {
     if (amount <= 0) {
       Swal.fire({
@@ -152,6 +251,7 @@ const useMainController = () => {
       itemName,
       amount,
       consumers,
+      category,
       timestamp: new Date() as any
     }
 
@@ -200,7 +300,8 @@ const useMainController = () => {
     purchaseId: string,
     itemName: string,
     amount: number,
-    consumers: string[]
+    consumers: string[],
+    category: string = DEFAULT_CATEGORY_ID
   ) => {
     if (amount <= 0) {
       Swal.fire({
@@ -228,7 +329,7 @@ const useMainController = () => {
         ...user,
         purchases: user.purchases.map((p) =>
           p.id === purchaseId
-            ? { ...p, itemName, amount, consumers }
+            ? { ...p, itemName, amount, consumers, category }
             : p
         )
       }
@@ -328,7 +429,22 @@ const useMainController = () => {
       })
 
       setCurrentSplitId(docRef.id)
-      
+
+      // Public preview used by the QR/link join flow — the trip itself is only
+      // readable by its owner and members.
+      try {
+        await upsertTripInvite({
+          tripId: docRef.id,
+          tripName: tripName.trim() || 'ທຣິບ',
+          ownerId: user?.uid ?? 'anonymous',
+          ownerName: user?.displayName ?? user?.email ?? '',
+          ownerEmail: user?.email ?? '',
+          memberCount: users.length,
+        })
+      } catch (err) {
+        console.error('Error publishing trip invite:', err)
+      }
+
       await Swal.fire({
         icon: 'success',
         title: 'ສຳເລັດ',
@@ -506,7 +622,11 @@ const useMainController = () => {
     saveToHistory,
     clearCalculation,
     getFormulaDescription,
-    calculateSettlements // Export this function
+    calculateSettlements, // Export this function
+    savedGroups,
+    applySavedGroup,
+    saveCurrentGroup,
+    removeSavedGroup,
   }
 }
 

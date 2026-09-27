@@ -28,6 +28,9 @@ import {
   FormControlLabel,
   Checkbox,
   FormLabel,
+  Tooltip,
+  ToggleButtonGroup,
+  ToggleButton,
 } from "@mui/material";
 import {
   ArrowBack as ArrowBackIcon,
@@ -40,11 +43,19 @@ import {
   Receipt as ReceiptIcon,
   Edit as EditIcon,
   Delete as DeleteIcon,
+  BookmarkAdd as BookmarkAddIcon,
+  Bookmarks as BookmarksIcon,
 } from "@mui/icons-material";
 import { useState } from "react";
 import Swal from "sweetalert2";
 import useMainControllerContext from "../context";
 import { formatLaoKip, formatLaoKipWithCurrency } from "../../../utils/formatLaoKip";
+import {
+  EXPENSE_CATEGORIES,
+  DEFAULT_CATEGORY_ID,
+  getCategory,
+} from "../../../constants/categories";
+import type { SavedGroup } from "../../../model/calculateModel";
 
 const AVATAR_COLORS = [
   "#1976d2",
@@ -90,6 +101,10 @@ export const UserSplitCalculator = () => {
     editPurchase,
     deletePurchase,
     calculateSettlements,
+    savedGroups,
+    applySavedGroup,
+    saveCurrentGroup,
+    removeSavedGroup,
   } = useMainControllerContext();
 
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -98,6 +113,7 @@ export const UserSplitCalculator = () => {
   const [purchaseAmount, setPurchaseAmount] = useState("");
   // userIds of people who shared this item (default: everyone)
   const [consumerIds, setConsumerIds] = useState<string[]>([]);
+  const [category, setCategory] = useState<string>(DEFAULT_CATEGORY_ID);
   // Edit mode state
   const [editingPurchaseId, setEditingPurchaseId] = useState<string | null>(null);
 
@@ -106,15 +122,17 @@ export const UserSplitCalculator = () => {
   const handleOpenDialog = (presetIndex?: number) => {
     setPayerIndex(presetIndex ?? "");
     setConsumerIds(allUserIds); // default: everyone shares
+    setCategory(DEFAULT_CATEGORY_ID);
     setEditingPurchaseId(null); // new purchase mode
     setDialogOpen(true);
   };
 
-  const handleOpenEditDialog = (userIndex: number, purchase: { id: string; itemName: string; amount: number; consumers?: string[] }) => {
+  const handleOpenEditDialog = (userIndex: number, purchase: { id: string; itemName: string; amount: number; consumers?: string[]; category?: string }) => {
     setPayerIndex(userIndex);
     setItemName(purchase.itemName);
     setPurchaseAmount(formatMoneyInput(String(purchase.amount)));
     setConsumerIds(purchase.consumers && purchase.consumers.length > 0 ? purchase.consumers : allUserIds);
+    setCategory(purchase.category || DEFAULT_CATEGORY_ID);
     setEditingPurchaseId(purchase.id);
     setDialogOpen(true);
   };
@@ -125,6 +143,7 @@ export const UserSplitCalculator = () => {
     setItemName("");
     setPurchaseAmount("");
     setConsumerIds([]);
+    setCategory(DEFAULT_CATEGORY_ID);
     setEditingPurchaseId(null);
   };
 
@@ -153,10 +172,10 @@ export const UserSplitCalculator = () => {
     ) {
       if (editingPurchaseId) {
         // Edit mode
-        editPurchase(payerIndex as number, editingPurchaseId, itemName, amount, consumerIds);
+        editPurchase(payerIndex as number, editingPurchaseId, itemName, amount, consumerIds, category);
       } else {
         // Add mode
-        addPurchase(payerIndex, itemName, amount, consumerIds);
+        addPurchase(payerIndex, itemName, amount, consumerIds, category);
       }
       handleCloseDialog();
     }
@@ -220,6 +239,37 @@ export const UserSplitCalculator = () => {
             placeholder="ເຊັ່ນ: ທ່ຽວທະເລ, ລ້ຽງເພື່ອນ"
           />
 
+          {savedGroups.length > 0 && (
+            <Card variant="outlined">
+              <CardContent>
+                <Typography
+                  variant="subtitle1"
+                  fontWeight="bold"
+                  gutterBottom
+                  sx={{ display: "flex", alignItems: "center", gap: 1 }}
+                >
+                  <BookmarksIcon fontSize="small" /> ກຸ່ມທີ່ບັນທຶກໄວ້
+                </Typography>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+                  ກົດເພື່ອໃຊ້ລາຍຊື່ກຸ່ມນີ້ຄືນ
+                </Typography>
+                <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                  {savedGroups.map((group: SavedGroup) => (
+                    <Tooltip key={group.id} title={group.memberNames.join(", ")}>
+                      <Chip
+                        label={`${group.name} (${group.memberNames.length})`}
+                        onClick={() => applySavedGroup(group)}
+                        onDelete={() => removeSavedGroup(group)}
+                        color="primary"
+                        variant="outlined"
+                      />
+                    </Tooltip>
+                  ))}
+                </Stack>
+              </CardContent>
+            </Card>
+          )}
+
           <TextField
             label="ຈຳນວນຄົນທັງໝົດ"
             type="number"
@@ -237,6 +287,16 @@ export const UserSplitCalculator = () => {
                   ປ້ອນຊື່ຜູ້ໃຊ້
                 </Typography>
                 <Divider sx={{ mb: 2 }} />
+                <Box sx={{ display: "flex", justifyContent: "flex-end", mb: 1 }}>
+                  <Button
+                    size="small"
+                    startIcon={<BookmarkAddIcon />}
+                    onClick={saveCurrentGroup}
+                    disabled={userNames.filter((n) => n.trim()).length < 2}
+                  >
+                    ບັນທຶກເປັນກຸ່ມ
+                  </Button>
+                </Box>
                 <Grid container spacing={2}>
                   {userNames.map((name, index) => (
                     <Grid size={{ xs: 12, sm: 6 }} key={index}>
@@ -574,12 +634,31 @@ export const UserSplitCalculator = () => {
                                     </IconButton>
                                   </Box>
                                 </Box>
-                                <Typography
+                                <Box
+                                  sx={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: 0.5,
+                                    flexWrap: "wrap",
+                                  }}
+                                >
+                                  <Chip
+                                    size="small"
+                                    label={`${getCategory(purchase.category).emoji} ${getCategory(purchase.category).label}`}
+                                    sx={{
+                                      height: 20,
+                                      fontSize: "0.7rem",
+                                      bgcolor: `${getCategory(purchase.category).color}22`,
+                                      color: getCategory(purchase.category).color,
+                                    }}
+                                  />
+                                  <Typography
                                   variant="caption"
                                   color="text.secondary"
                                 >
                                   ຮ່ວມ: {consumerNames(purchase.consumers)}
                                 </Typography>
+                                </Box>
                               </Box>
                             ))}
                           </Paper>
@@ -700,6 +779,34 @@ export const UserSplitCalculator = () => {
               autoFocus
               placeholder="ເຊັ່ນ: ກາເຟ, ອາຫານທ່ຽງ, ນ້ຳມັນ"
             />
+
+            <FormControl component="fieldset" variant="standard">
+              <FormLabel component="legend" sx={{ mb: 1 }}>
+                ປະເພດລາຍຈ່າຍ
+              </FormLabel>
+              <ToggleButtonGroup
+                value={category}
+                exclusive
+                onChange={(_, value) => value && setCategory(value)}
+                size="small"
+                sx={{
+                  flexWrap: "wrap",
+                  gap: 0.5,
+                  "& .MuiToggleButton-root": {
+                    borderRadius: 2,
+                    border: "1px solid",
+                    borderColor: "divider",
+                  },
+                }}
+              >
+                {EXPENSE_CATEGORIES.map((c) => (
+                  <ToggleButton key={c.id} value={c.id} sx={{ px: 1.5 }}>
+                    <span style={{ marginRight: 4 }}>{c.emoji}</span>
+                    {c.label}
+                  </ToggleButton>
+                ))}
+              </ToggleButtonGroup>
+            </FormControl>
 
             <TextField
               label="ຈຳນວນເງິນ"

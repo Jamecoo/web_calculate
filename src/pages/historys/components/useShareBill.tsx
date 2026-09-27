@@ -8,6 +8,7 @@ import {
   type Settlement,
 } from "../../../utils/splitCalculations";
 import type { UserShare } from "../../../model/calculateModel";
+import { getCategory } from "../../../constants/categories";
 
 const useShareableBill = () => {
   const billRef = useRef<HTMLDivElement>(null);
@@ -92,7 +93,9 @@ const useShareableBill = () => {
                     (p) => `
                   <div style="display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-top:1px dashed ${LINE};">
                     <div style="min-width:0;">
-                      <div style="color:${SLATE};font-size:14px;">${p.itemName}</div>
+                      <div style="color:${SLATE};font-size:14px;">${getCategory(
+                      p.category
+                    ).emoji} ${p.itemName}</div>
                       <div style="color:${MUTED};font-size:12px;">ຮ່ວມ: ${consumerLabel(
                       p.consumers
                     )}</div>

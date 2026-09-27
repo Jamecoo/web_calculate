@@ -7,6 +7,37 @@ export interface Settlement {
   amount: number
 }
 
+// Transfers are rounded to this many kip — nobody hands over 333 kip.
+export const SETTLEMENT_UNIT = 1000
+
+/**
+ * Round a set of balances to `unit` WITHOUT losing money.
+ *
+ * Rounding each balance on its own lets the group total drift away from zero
+ * (five people rounded up = 5,000 kip that nobody owes), which leaves the
+ * settlement list unbalanced. So: round everyone, measure the residue, then
+ * push it back onto the people whose own rounding moved them the furthest, a
+ * `unit` at a time, until the balances sum to exactly zero again.
+ */
+const reconcileRounding = (balances: number[], unit: number): number[] => {
+  const rounded = balances.map((b) => Math.round(b / unit) * unit)
+  const residue = rounded.reduce((sum, b) => sum + b, 0)
+  const steps = Math.round(Math.abs(residue) / unit)
+  if (steps === 0) return rounded
+
+  // residue > 0 => the group "owes" too much, so take a unit back from whoever
+  // gained the most from rounding (and the mirror image when it is negative).
+  const step = residue > 0 ? -unit : unit
+  const order = balances
+    .map((balance, index) => ({ index, gain: rounded[index] - balance }))
+    .sort((a, b) => (residue > 0 ? b.gain - a.gain : a.gain - b.gain))
+
+  for (let k = 0; k < steps; k++) {
+    rounded[order[k % order.length].index] += step
+  }
+  return rounded
+}
+
 /**
  * Recompute each person's paid / consumed / balance from the itemised purchases.
  *
@@ -17,6 +48,10 @@ export interface Settlement {
  *   paid[u]     = sum of amounts u paid for
  *   consumed[u] = sum over items u consumed of amount / (number of consumers)
  *   balance[u]  = consumed - paid   (>0 => still owes/pays, <0 => should receive)
+ *
+ * paid and consumed are kept exact (to the kip); only the balance is rounded to
+ * SETTLEMENT_UNIT, and that rounding is reconciled across the whole group so the
+ * balances still cancel out.
  *
  * An empty consumers list is treated as "everyone" (safety / back-compat with
  * older records that had no consumer data).
@@ -46,9 +81,14 @@ export const computeUserTotals = (users: UserShare[]): UserShare[] => {
     })
   })
 
-  return users.map((u) => {
-    const uPaid = Math.round(paid[u.userId] / 1000) * 1000
-    const uConsumed = Math.round(consumed[u.userId] / 1000) * 1000
+  const exactBalances = users.map(
+    (u) => consumed[u.userId] - paid[u.userId]
+  )
+  const balances = reconcileRounding(exactBalances, SETTLEMENT_UNIT)
+
+  return users.map((u, index) => {
+    const uPaid = Math.round(paid[u.userId])
+    const uConsumed = Math.round(consumed[u.userId])
     return {
       ...u,
       paid: uPaid,
@@ -56,26 +96,33 @@ export const computeUserTotals = (users: UserShare[]): UserShare[] => {
       // initialShare kept for backward-compat readers; now means "amount this
       // person is responsible for" (their consumed total).
       initialShare: uConsumed,
-      currentBalance: uConsumed - uPaid,
+      currentBalance: balances[index],
     }
   })
 }
 
 /**
  * Greedy who-pays-whom matcher: creditors (negative balance, should receive)
- * matched against debtors (positive balance, should pay). Amounts under 0.01
- * are treated as settled.
+ * matched against debtors (positive balance, should pay).
+ *
+ * Balances are reconciled to SETTLEMENT_UNIT first, so they cancel out exactly
+ * and every kip on the debit side lands on somebody's credit side.
  */
 export const calculateSettlements = (users: UserShare[]): Settlement[] => {
   if (users.length === 0) return []
 
+  const balances = reconcileRounding(
+    users.map((u) => u.currentBalance || 0),
+    SETTLEMENT_UNIT
+  )
+
   const creditors = users
-    .filter((u) => u.currentBalance < 0)
-    .map((u) => ({ userName: u.userName, amount: Math.abs(u.currentBalance) }))
+    .map((u, index) => ({ userName: u.userName, amount: -balances[index] }))
+    .filter((c) => c.amount > 0)
 
   const debtors = users
-    .filter((u) => u.currentBalance > 0)
-    .map((u) => ({ userName: u.userName, amount: u.currentBalance }))
+    .map((u, index) => ({ userName: u.userName, amount: balances[index] }))
+    .filter((d) => d.amount > 0)
 
   const settlements: Settlement[] = []
   let i = 0
@@ -84,7 +131,7 @@ export const calculateSettlements = (users: UserShare[]): Settlement[] => {
   while (i < creditors.length && j < debtors.length) {
     const creditor = creditors[i]
     const debtor = debtors[j]
-    const settleAmount = Math.round(Math.min(creditor.amount, debtor.amount) / 1000) * 1000
+    const settleAmount = Math.min(creditor.amount, debtor.amount)
 
     if (settleAmount > 0) {
       settlements.push({
@@ -97,8 +144,8 @@ export const calculateSettlements = (users: UserShare[]): Settlement[] => {
     creditor.amount -= settleAmount
     debtor.amount -= settleAmount
 
-    if (creditor.amount < 1000) i++
-    if (debtor.amount < 1000) j++
+    if (creditor.amount <= 0) i++
+    if (debtor.amount <= 0) j++
   }
 
   return settlements

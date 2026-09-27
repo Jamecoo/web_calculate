@@ -2,6 +2,8 @@ import { useState, useEffect, useMemo } from "react";
 import { collection, query, where, onSnapshot } from "firebase/firestore";
 import { db } from "../../../firebase";
 import useAuth from "../../../context/auth";
+import { EXPENSE_CATEGORIES, getCategory } from "../../../constants/categories";
+import type { Purchase, UserShare } from "../../../model/calculateModel";
 
 interface UserCost {
   userName: string;
@@ -10,9 +12,20 @@ interface UserCost {
   tripCount: number;
 }
 
+// What the money went ON, as opposed to who spent it.
+export interface CategoryCost {
+  id: string;
+  label: string;
+  emoji: string;
+  color: string;
+  total: number;
+  count: number;
+}
+
 interface CostSummary {
   totalAmount: number;
   userCosts: UserCost[];
+  categoryCosts: CategoryCost[];
   tripCount: number;
 }
 
@@ -175,11 +188,38 @@ const useCostReportController = () => {
       (a, b) => b.totalConsumed - a.totalConsumed,
     );
 
+    // Category totals come straight off the purchases, so every kip is counted
+    // once no matter how it was shared out.
+    const categoryTotals = new Map<string, { total: number; count: number }>();
+    filteredSplits.forEach((split) => {
+      (split.users || []).forEach((u: UserShare) => {
+        (u.purchases || []).forEach((p: Purchase) => {
+          const id = getCategory(p.category).id;
+          const entry = categoryTotals.get(id) || { total: 0, count: 0 };
+          entry.total += p.amount || 0;
+          entry.count += 1;
+          categoryTotals.set(id, entry);
+        });
+      });
+    });
+
+    const categoryCosts: CategoryCost[] = EXPENSE_CATEGORIES.map((c) => ({
+      id: c.id,
+      label: c.label,
+      emoji: c.emoji,
+      color: c.color,
+      total: categoryTotals.get(c.id)?.total ?? 0,
+      count: categoryTotals.get(c.id)?.count ?? 0,
+    }))
+      .filter((c) => c.count > 0)
+      .sort((a, b) => b.total - a.total);
+
     const totalAmount = userCosts.reduce((sum, u) => sum + u.totalConsumed, 0);
 
     return {
       totalAmount,
       userCosts,
+      categoryCosts,
       tripCount: filteredSplits.length,
     };
   }, [filteredSplits]);

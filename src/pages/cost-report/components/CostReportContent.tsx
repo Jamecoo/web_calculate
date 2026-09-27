@@ -27,6 +27,7 @@ import {
 } from "@mui/icons-material";
 import { formatLaoKipWithCurrency } from "../../../utils/formatLaoKip";
 import useMainControllerContext from "../context";
+import type { CategoryCost } from "../controllers";
 
 export const CostReportContent = () => {
   const {
@@ -53,6 +54,11 @@ export const CostReportContent = () => {
   const maxConsumed = Math.max(
     ...costSummary.userCosts.map((u: any) => u.totalConsumed),
     1
+  );
+
+  const categoryTotal = costSummary.categoryCosts.reduce(
+    (sum: number, c: CategoryCost) => sum + c.total,
+    0
   );
 
   return (
@@ -181,6 +187,72 @@ export const CostReportContent = () => {
           </Card>
         </Grid>
       </Grid>
+
+      {/* Category Breakdown */}
+      {costSummary.categoryCosts.length > 0 && (
+        <>
+          <Typography variant="subtitle1" fontWeight="bold" gutterBottom>
+            ຮູປແບບຄ່າໃຊ້ຈ່າຍ
+          </Typography>
+          <Card variant="outlined" sx={{ mb: 3 }}>
+            <CardContent>
+              <Stack spacing={2}>
+                {costSummary.categoryCosts.map((cat: CategoryCost) => {
+                  const share = categoryTotal
+                    ? (cat.total / categoryTotal) * 100
+                    : 0;
+                  return (
+                    <Box key={cat.id}>
+                      <Box
+                        sx={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "baseline",
+                          gap: 1,
+                          mb: 0.5,
+                        }}
+                      >
+                        <Typography variant="body2" fontWeight={600}>
+                          {cat.emoji} {cat.label}
+                        </Typography>
+                        <Box sx={{ textAlign: "right" }}>
+                          <Typography
+                            variant="body2"
+                            fontWeight="bold"
+                            component="span"
+                          >
+                            {formatLaoKipWithCurrency(cat.total)}
+                          </Typography>
+                          <Typography
+                            variant="caption"
+                            color="text.secondary"
+                            sx={{ ml: 1 }}
+                          >
+                            {share.toFixed(0)}% · {cat.count}
+                          </Typography>
+                        </Box>
+                      </Box>
+                      <LinearProgress
+                        variant="determinate"
+                        value={share}
+                        sx={{
+                          height: 8,
+                          borderRadius: 4,
+                          bgcolor: "action.hover",
+                          "& .MuiLinearProgress-bar": {
+                            bgcolor: cat.color,
+                            borderRadius: 4,
+                          },
+                        }}
+                      />
+                    </Box>
+                  );
+                })}
+              </Stack>
+            </CardContent>
+          </Card>
+        </>
+      )}
 
       {/* User Cost Breakdown */}
       <Typography variant="subtitle1" fontWeight="bold" gutterBottom sx={{ mt: 1 }}>
