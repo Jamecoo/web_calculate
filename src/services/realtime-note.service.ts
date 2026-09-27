@@ -12,6 +12,7 @@ import {
   Timestamp,
   getDocs,
   deleteDoc,
+  orderBy,
 } from "firebase/firestore";
 import { db } from "../firebase";
 
@@ -33,14 +34,18 @@ export interface Player {
 
 export interface HistoryRecord {
   id: string;
+  type?: "round" | "adjustment"; // NEW — "round" (or missing, for old data) = normal turn; "adjustment" = manual balance edit
   winnerId: string;
   winnerName: string;
   amountPerLoser: number;
-  // IDs of losers who paid double (x2) on this particular round.
-  // Optional/defaulted so older history docs without the field still work.
   doubledLoserIds?: string[];
   totalPlayersAtTurn: number;
   createdAt?: Timestamp | null;
+  // NEW — only present when type === "adjustment"
+  adjustedPlayerId?: string;
+  adjustedPlayerName?: string;
+  previousBalance?: number;
+  newBalance?: number;
 }
 
 // Only returns rooms the given user can see: rooms they own, plus rooms
@@ -136,6 +141,16 @@ export const subscribeToPlayers = (
   );
 };
 
+export const updatePlayerBalance = async (
+  gameId: string,
+  playerId: string,
+  newBalance: number,
+) => {
+  if (!gameId || !playerId) return;
+  const playerRef = doc(db, "games", gameId, "players", playerId);
+  await updateDoc(playerRef, { balance: newBalance });
+};
+
 // 3. Subscribe to History inside selected room ('games/{gameId}/history')
 export const subscribeToHistory = (
   gameId: string,
@@ -144,8 +159,11 @@ export const subscribeToHistory = (
   if (!gameId) return () => {};
 
   const historyRef = collection(db, "games", gameId, "history");
+  // NEW: order by createdAt descending so the latest round is always first
+  const historyQuery = query(historyRef, orderBy("createdAt", "desc"));
+
   return onSnapshot(
-    historyRef,
+    historyQuery,
     (snapshot) => {
       const list: HistoryRecord[] = snapshot.docs.map((d) => ({
         id: d.id,
@@ -319,4 +337,33 @@ const recalculateAllBalances = async (gameId: string) => {
     const playerRef = doc(db, "games", gameId, "players", pId);
     await updateDoc(playerRef, { balance: newBalance });
   }
+};
+
+export const updatePlayerBalanceWithHistory = async (
+  gameId: string,
+  playerId: string,
+  playerName: string,
+  previousBalance: number,
+  newBalance: number,
+) => {
+  if (!gameId || !playerId) return;
+
+  const playerRef = doc(db, "games", gameId, "players", playerId);
+  await updateDoc(playerRef, { balance: newBalance });
+
+  const historyRef = collection(db, "games", gameId, "history");
+  await addDoc(historyRef, {
+    type: "adjustment",
+    adjustedPlayerId: playerId,
+    adjustedPlayerName: playerName,
+    previousBalance,
+    newBalance,
+    // These fields exist on every HistoryRecord for type compatibility with
+    // "round" entries, but aren't meaningful for an adjustment.
+    winnerId: "",
+    winnerName: "",
+    amountPerLoser: 0,
+    totalPlayersAtTurn: 0,
+    createdAt: serverTimestamp(),
+  });
 };

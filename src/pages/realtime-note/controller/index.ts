@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import Swal from "sweetalert2";
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { auth } from "../../../firebase";
@@ -17,6 +17,8 @@ import {
   type GameSession,
   type Player,
   type HistoryRecord,
+  //   updatePlayerBalance,
+  updatePlayerBalanceWithHistory,
 } from "../../../services/realtime-note.service";
 
 // SweetAlert2 base styling for dark theme.
@@ -61,11 +63,51 @@ export const useMainController = () => {
   const [inviteEmailInput, setInviteEmailInput] = useState("");
   // NEW: starting balance the user types in when adding a player
   const [startingBalanceDisplay, setStartingBalanceDisplay] = useState("");
+  // NEW: tracks just the "recording a round" action, so the button can disable itself
+  const [isRecordingRound, setIsRecordingRound] = useState(false);
+  // Manual balance edit state
+  const [editingPlayer, setEditingPlayer] = useState<Player | null>(null);
+  const [editBalanceDisplay, setEditBalanceDisplay] = useState("");
 
   // Non-blocking success feedback. The UI renders this as a Snackbar instead
   // of a SweetAlert2 popup, since a toast that appears near the action and
   // auto-dismisses is less disruptive than a modal for routine confirmations.
   const [successMessage, setSuccessMessage] = useState("");
+  // NEW: tracks the "saving a manual balance edit" action
+  const [isSavingBalance, setIsSavingBalance] = useState(false);
+
+  const handleOpenEditBalance = (player: Player) => {
+    setEditingPlayer(player);
+    setEditBalanceDisplay(formatSignedWithCommas(player.balance));
+  };
+
+  const handleSaveEditBalance = async () => {
+    if (!editingPlayer || !selectedGameId) return;
+    const newBalance = parseSignedRawNumber(editBalanceDisplay);
+
+    setIsSavingBalance(true); // NEW
+    try {
+      await updatePlayerBalanceWithHistory(
+        selectedGameId,
+        editingPlayer.id,
+        editingPlayer.name,
+        editingPlayer.balance,
+        newBalance,
+      );
+      setEditingPlayer(null);
+      setSuccessMessage("ແກ້ໄຂຄະແນນສຳເລັດ");
+    } catch (err) {
+      customSwal.fire({
+        icon: "error",
+        title: "ແກ້ໄຂບໍ່ສຳເລັດ",
+      });
+    } finally {
+      setIsSavingBalance(false); // NEW — runs whether it succeeded or failed
+    }
+  };
+
+  const handleEditBalanceChange = (e: React.ChangeEvent<HTMLInputElement>) =>
+    setEditBalanceDisplay(formatSignedWithCommas(e.target.value));
 
   const formatWithCommas = (val: string | number) => {
     const num = val.toString().replace(/\D/g, "");
@@ -139,7 +181,7 @@ export const useMainController = () => {
         } else {
           setSessions(gameList);
           // Keep the current selection if it's still visible to this user;
-          // otherwise (first load, or access was revoked) fall back to the
+          // otherwise (first load, or access was revoked) fall bachandleSaveEditBalancek to the
           // first room in the list.
           setSelectedGameId((prev) =>
             prev && gameList.some((g) => g.id === prev) ? prev : gameList[0].id,
@@ -292,12 +334,11 @@ export const useMainController = () => {
     const winner = players.find((p) => p.id === selectedWinnerId);
     if (!winner) return;
 
-    // The winner can't also be a "doubled" loser; filter defensively in
-    // case the winner selection changed after some ids were toggled.
     const doubledIdsForThisRound = doubledLoserIds.filter(
       (id) => id !== winner.id,
     );
 
+    setIsRecordingRound(true); // NEW
     try {
       await recordTurnToFirestore(
         selectedGameId,
@@ -316,6 +357,8 @@ export const useMainController = () => {
         title: "ບັນທຶກບໍ່ສຳເລັດ",
         text: "ເກີດຂໍ້ຜິດພາດໃນການບັນທຶກ, ກະລຸນາລອງໃໝ່",
       });
+    } finally {
+      setIsRecordingRound(false); // NEW — runs whether it succeeded or failed
     }
   };
 
@@ -416,7 +459,22 @@ export const useMainController = () => {
     currentUser && currentGame && currentGame.ownerId === currentUser.uid,
   );
 
+  const sortedPlayers = useMemo(
+    () => [...players].sort((a, b) => b.balance - a.balance),
+    [players],
+  );
+
   return {
+    isSavingBalance,
+    handleEditBalanceChange,
+    editingPlayer,
+    setEditingPlayer,
+    editBalanceDisplay,
+    setEditBalanceDisplay,
+    handleOpenEditBalance,
+    handleSaveEditBalance,
+    sortedPlayers,
+    isRecordingRound,
     startingBalanceDisplay,
     handleStartingBalanceChange: (e: React.ChangeEvent<HTMLInputElement>) =>
       setStartingBalanceDisplay(formatSignedWithCommas(e.target.value)),

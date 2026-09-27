@@ -35,6 +35,14 @@ import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import PersonAddAlt1Icon from "@mui/icons-material/PersonAddAlt1";
 import LogoutIcon from "@mui/icons-material/Logout";
 import useMainController from "./controller";
+//icon
+import MilitaryTechIcon from "@mui/icons-material/MilitaryTech"; // NEW — medal for 2nd/3rd
+import LooksOneIcon from "@mui/icons-material/LooksOne";
+import LooksTwoIcon from "@mui/icons-material/LooksTwo";
+import Looks3Icon from "@mui/icons-material/Looks3";
+import Looks4Icon from "@mui/icons-material/Looks4";
+import Looks5Icon from "@mui/icons-material/Looks5";
+import Looks6Icon from "@mui/icons-material/Looks6";
 
 const customTheme = createTheme({
   typography: {
@@ -87,8 +95,47 @@ const customTheme = createTheme({
   },
 });
 
+const RankIcon = ({ index }: { index: number }) => {
+  const iconSx = { fontSize: 22 };
+
+  if (index === 0)
+    return <EmojiEventsIcon sx={{ ...iconSx, color: "#fbbf24" }} />; // gold trophy
+  if (index === 1)
+    return <MilitaryTechIcon sx={{ ...iconSx, color: "#cbd5e1" }} />; // silver medal
+  if (index === 2)
+    return <MilitaryTechIcon sx={{ ...iconSx, color: "#d97706" }} />; // bronze medal
+
+  const numberedIcons = [
+    LooksOneIcon,
+    LooksTwoIcon,
+    Looks3Icon,
+    Looks4Icon,
+    Looks5Icon,
+    Looks6Icon,
+  ];
+  const NumberedIcon = numberedIcons[index]; // index 3 → LooksFour (i.e. rank 5), etc.
+  if (NumberedIcon)
+    return <NumberedIcon sx={{ ...iconSx, color: "#94a3b8" }} />;
+
+  // fallback for large player counts beyond rank 9
+  return (
+    <Typography fontWeight={800} fontSize="0.8rem" color="#94a3b8">
+      {index + 1}
+    </Typography>
+  );
+};
+
 export const RealtimeNotePages = () => {
   const {
+    isSavingBalance,
+    handleEditBalanceChange,
+    editingPlayer,
+    setEditingPlayer,
+    editBalanceDisplay,
+    // setEditBalanceDisplay,
+    handleOpenEditBalance,
+    handleSaveEditBalance,
+    sortedPlayers,
     currentUser,
     authLoading,
     handleLogout,
@@ -132,6 +179,7 @@ export const RealtimeNotePages = () => {
     handleRemoveMember,
     startingBalanceDisplay,
     handleStartingBalanceChange,
+    isRecordingRound,
   } = useMainController();
 
   const isMobile = useMediaQuery("(max-width:600px)");
@@ -451,7 +499,7 @@ export const RealtimeNotePages = () => {
             </Typography>
           ) : (
             <List dense disablePadding>
-              {players.map((player, index) => {
+              {sortedPlayers.map((player, index) => {
                 const isWinner = player.balance > 0;
                 const isNeutral = player.balance === 0;
 
@@ -464,41 +512,55 @@ export const RealtimeNotePages = () => {
                         gap: 1,
                       }}
                       secondaryAction={
-                        <Tooltip title="ລົບຜູ້ຫຼິ້ນນີ້">
-                          <IconButton
-                            size="small"
-                            onClick={() =>
-                              handleRemovePlayer(player.id, player.name)
-                            }
-                            aria-label={`ລົບ ${player.name}`}
-                            sx={{
-                              color: "#94a3b8",
-                              "&:hover": {
-                                color: "#ef4444",
-                                bgcolor: "rgba(239, 68, 68, 0.1)",
-                              },
-                            }}
-                          >
-                            <DeleteOutlineIcon fontSize="small" />
-                          </IconButton>
-                        </Tooltip>
+                        <Box display="flex" gap={0.5}>
+                          <Tooltip title="ແກ້ໄຂຄະແນນ">
+                            <IconButton
+                              size="small"
+                              onClick={() => handleOpenEditBalance(player)}
+                              aria-label={`ແກ້ໄຂຄະແນນ ${player.name}`}
+                              sx={{
+                                color: "#94a3b8",
+                                "&:hover": { color: "#6366f1" },
+                              }}
+                            >
+                              <EditIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                          <Tooltip title="ລົບຜູ້ຫຼິ້ນນີ້">
+                            <IconButton
+                              size="small"
+                              onClick={() =>
+                                handleRemovePlayer(player.id, player.name)
+                              }
+                              aria-label={`ລົບ ${player.name}`}
+                              sx={{
+                                color: "#94a3b8",
+                                "&:hover": {
+                                  color: "#ef4444",
+                                  bgcolor: "rgba(239, 68, 68, 0.1)",
+                                },
+                              }}
+                            >
+                              <DeleteOutlineIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                        </Box>
                       }
                     >
                       {/* Status dot: at a glance, who's up / even / down */}
                       <Box
                         sx={{
-                          width: 8,
-                          height: 8,
-                          borderRadius: "50%",
+                          width: 26,
+                          height: 26,
                           flexShrink: 0,
                           mr: 1.5,
-                          bgcolor: isWinner
-                            ? "#10b981"
-                            : isNeutral
-                              ? "#475569"
-                              : "#ef4444",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
                         }}
-                      />
+                      >
+                        <RankIcon index={index} />
+                      </Box>
                       <ListItemText
                         primary={
                           <Typography
@@ -519,7 +581,7 @@ export const RealtimeNotePages = () => {
                             : isNeutral
                               ? "#f8fafc"
                               : "#f87171",
-                          mr: 5,
+                          mr: 8,
                           whiteSpace: "nowrap",
                         }}
                       >
@@ -602,7 +664,10 @@ export const RealtimeNotePages = () => {
                 color="success"
                 onClick={handleRecordRound}
                 disabled={
-                  !selectedWinnerId || !roundAmountDisplay || players.length < 2
+                  !selectedWinnerId ||
+                  !roundAmountDisplay ||
+                  players.length < 2 ||
+                  isRecordingRound // NEW
                 }
                 sx={{
                   py: 1,
@@ -610,7 +675,11 @@ export const RealtimeNotePages = () => {
                   "&:hover": { bgcolor: "#059669" },
                 }}
               >
-                ບັນທຶກຕານີ້
+                {isRecordingRound ? (
+                  <CircularProgress size={20} sx={{ color: "#fff" }} />
+                ) : (
+                  "ບັນທຶກຕານີ້"
+                )}
               </Button>
             </Grid>
           </Grid>
@@ -704,12 +773,68 @@ export const RealtimeNotePages = () => {
                       minute: "2-digit",
                     })
                   : "ດຽວນີ້";
+
+                // NEW: adjustment entries render differently — no winner/loser math applies
+                if (turn.type === "adjustment") {
+                  const delta =
+                    (turn.newBalance ?? 0) - (turn.previousBalance ?? 0);
+                  return (
+                    <React.Fragment key={turn.id}>
+                      <ListItem sx={{ py: 1.2, pr: 6 }}>
+                        <ListItemText
+                          primary={
+                            <Box
+                              display="flex"
+                              alignItems="center"
+                              gap={1}
+                              flexWrap="wrap"
+                            >
+                              <Chip
+                                label="ແກ້ໄຂຄະແນນ"
+                                size="small"
+                                sx={{
+                                  bgcolor: "#6366f1",
+                                  color: "#fff",
+                                  fontWeight: 600,
+                                }}
+                              />
+                              <Typography fontWeight={600} color="#f8fafc">
+                                <strong>{turn.adjustedPlayerName}</strong>{" "}
+                                {turn.previousBalance?.toLocaleString()} →{" "}
+                                {turn.newBalance?.toLocaleString()} ກີບ{" "}
+                                <span
+                                  style={{
+                                    color: delta >= 0 ? "#34d399" : "#f87171",
+                                    fontWeight: 700,
+                                  }}
+                                >
+                                  ({delta >= 0 ? "+" : ""}
+                                  {delta.toLocaleString()})
+                                </span>
+                              </Typography>
+                            </Box>
+                          }
+                          secondary={`ເວລາ: ${formattedTime}`}
+                          secondaryTypographyProps={{
+                            color: "#94a3b8",
+                            mt: 0.5,
+                          }}
+                        />
+                      </ListItem>
+                      {index < history.length - 1 && (
+                        <Divider
+                          component="li"
+                          sx={{ borderColor: "#334155" }}
+                        />
+                      )}
+                    </React.Fragment>
+                  );
+                }
+
+                // ↓↓↓ THIS IS YOUR EXISTING "round" CODE — unchanged, just continues here ↓↓↓
                 const totalPlayers = turn.totalPlayersAtTurn || players.length;
                 const doubledIds = turn.doubledLoserIds || [];
                 const totalLosers = totalPlayers - 1;
-                // Doubled losers pay amountPerLoser*2, everyone else pays
-                // amountPerLoser once — so the winner's total is the base
-                // amount for every loser plus one extra share per doubled loser.
                 const winnerTotal =
                   turn.amountPerLoser * (totalLosers + doubledIds.length);
                 const doubledNames = doubledIds
@@ -726,10 +851,7 @@ export const RealtimeNotePages = () => {
                           onClick={() => handleOpenEdit(turn)}
                           aria-label="ແກ້ໄຂຕານີ້"
                         >
-                          <EditIcon
-                            fontSize="small"
-                            sx={{ color: "#94a3b8" }}
-                          />
+                          {/* <EditIcon fontSize="small" sx={{ color: "#94a3b8" }} /> */}
                         </IconButton>
                       }
                     >
@@ -1042,6 +1164,60 @@ export const RealtimeNotePages = () => {
           </DialogActions>
         </Dialog>
       </Box>
+
+      {/* Edit Player Balance Modal */}
+      <Dialog
+        open={Boolean(editingPlayer)}
+        onClose={() => setEditingPlayer(null)}
+        fullScreen={isMobile}
+        fullWidth
+        maxWidth="xs"
+        PaperProps={{
+          sx: { borderRadius: 3, p: 1, bgcolor: "#1e293b", color: "#f8fafc" },
+        }}
+      >
+        <DialogTitle fontWeight={700}>
+          ແກ້ໄຂຄະແນນ: {editingPlayer?.name}
+        </DialogTitle>
+        <DialogContent sx={{ pt: 1 }}>
+          <Typography variant="subtitle2" color="#cbd5e1" mb={1}>
+            ຍອດຄະແນນໃໝ່ (ກີບ):
+          </Typography>
+          <TextField
+            autoFocus
+            fullWidth
+            size="small"
+            type="text"
+            inputMode="numeric"
+            value={editBalanceDisplay}
+            onChange={handleEditBalanceChange}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") handleSaveEditBalance();
+            }}
+            sx={{ bgcolor: "#0f172a" }}
+          />
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button
+            onClick={() => setEditingPlayer(null)}
+            sx={{ color: "#94a3b8" }}
+          >
+            ຍົກເລີກ
+          </Button>
+          <Button
+            variant="contained"
+            onClick={handleSaveEditBalance}
+            disabled={isSavingBalance} // NEW
+            sx={{ bgcolor: "#6366f1" }}
+          >
+            {isSavingBalance ? (
+              <CircularProgress size={20} sx={{ color: "#fff" }} />
+            ) : (
+              "ບັນທຶກ"
+            )}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {/* Success feedback: a quiet, auto-dismissing toast instead of a
           blocking SweetAlert2 popup — the action's result (new card, new
